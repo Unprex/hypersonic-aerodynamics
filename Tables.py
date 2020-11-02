@@ -38,14 +38,35 @@ def shockWaveRange(M):
     return table["SWAmin"](M), table["SWAmax"](M)
 
 
+#partie perso
+
+def p_sur_pisentropique(M):
+    return (1+((gamma-1)*M**2/2))**(-gamma/(gamma-1))
+
+def T_sur_Tisentropique(M):
+    return (1+((gamma-1)*M**2/2))**(-1)
+
+def rho_sur_rhoisentropique(M):
+    return (1+((gamma-1)*M**2/2))**(-1/(gamma-1))
+#fin partie perso
+
+
 def main(plt=False):
     """ Generate tables """
 
-    n = 200
-    listM = np.logspace(0, 2, n)
+    n1 = 200
+    n2 = 100
+    n = n1+n2
+    listM1=np.logspace(0,1,n1,endpoint=False)  #Mach 
+    listM2 = np.logspace(1, 2, n2)
+    listM=np.concatenate((listM1,listM2))
     listMDA = np.empty(n)  # Maximum Deflection Angle
     listSWAmin = np.empty(n)  # Shock Wave Angle at minimum
     listSWAmax = np.empty(n)  # Shock Wave Angle at maximum
+
+    listp_sur_pi=np.empty(n)  #pressure/isentropic pressure
+    listT_sur_Ti=np.empty(n)   #temperature/isentropic temperature
+    listrho_sur_rhoi=np.empty(n)   #density/isentropic density
 
     iterM = enumerate(listM)
     next(iterM)  # Skip first iteration
@@ -64,14 +85,18 @@ def main(plt=False):
                        full_output=True)
         assert r.converged
         listSWAmin[i] = x0
+    listp_sur_pi=p_sur_pisentropique(listM)
+    listT_sur_Ti=T_sur_Tisentropique(listM)
+    listrho_sur_rhoi=rho_sur_rhoisentropique(listM)
+    
 
-    writeTable("DSMdata.csv", (listM, listMDA, listSWAmin, listSWAmax))
+    writeTable("DSMdata.csv", (listM, listMDA, listSWAmin, listSWAmax, listp_sur_pi, listT_sur_Ti, listrho_sur_rhoi))
     table["MDA"] = interp1d(listM, listMDA, kind='cubic')
     table["SWAmin"] = interp1d(listM, listSWAmin, kind='cubic')
     table["SWAmax"] = interp1d(listM, listSWAmax, kind='cubic')
-
-    # Tables Prandtl-Meyer
-
+    table["p_sur_pi"] = interp1d(listM, listp_sur_pi, kind='cubic')
+    table["T_sur_pi"] = interp1d(listM, listT_sur_Ti, kind='cubic')
+    table["rho_sur_pi"] = interp1d(listM, listrho_sur_rhoi, kind='cubic')
 
     if plt:
         from matplotlib.ticker import ScalarFormatter
@@ -99,6 +124,12 @@ def main(plt=False):
 
         plt.show()
 
+        plt.plot(listM, listp_sur_pi, label="P")
+        plt.plot(listM, listT_sur_Ti, label="T")
+        plt.plot(listM, listrho_sur_rhoi, label="rho")
+        plt.xscale("log")
+        plt.show()
+
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
@@ -109,6 +140,7 @@ else:
         table["MDA"] = interp1d(listM, listMDA, kind='cubic')
         table["SWAmin"] = interp1d(listM, listSWAmax, kind='cubic')
         table["SWAmax"] = interp1d(listM, listSWAmin, kind='cubic')
+        table["p_sur_pi"] = interp1d(listM, listp_sur_pi, kind='cubic')
     except OSError as e:
         print(e)
         main()
