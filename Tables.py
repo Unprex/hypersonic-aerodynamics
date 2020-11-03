@@ -38,6 +38,15 @@ def shockWaveRange(M):
     return table["SWAmin"](M), table["SWAmax"](M)
 
 
+def prandtlMeyerNuMuFromMach(M):
+    return (np.sqrt((gamma+1)/(gamma-1))*np.arctan(np.sqrt((gamma-1)/(gamma+1)*(M**2-1)))-np.arctan(np.sqrt(M**2-1)))*180/np.pi, 180/np.pi*np.arcsin(1/M)
+
+#def prandtlMeyerMachFromMu (Mu):
+#   return 1/np.sin(Mu)
+    
+#def prandltMeyerMachFromNu (Nu):
+#    return 
+
 def main(plt=False):
     """ Generate tables """
 
@@ -46,12 +55,17 @@ def main(plt=False):
     listMDA = np.empty(n)  # Maximum Deflection Angle
     listSWAmin = np.empty(n)  # Shock Wave Angle at minimum
     listSWAmax = np.empty(n)  # Shock Wave Angle at maximum
+    listMu = np.empty(n) # Mu Prandlt Meyer 
+    listNu = np.empty(n) # Nu Prandlt Meyer
 
     iterM = enumerate(listM)
     next(iterM)  # Skip first iteration
     listMDA[0] = 0
     listSWAmin[0] = np.pi / 2
     listSWAmax[0] = np.pi / 2
+    listMu[0] = 0
+    listNu[0] = 90
+    
     for i, M in iterM:
         xopt, fval, ierr, numfunc = fminbound(
             lambda t: -deflectionAngleFromShock(t, M), 0, np.pi / 2,
@@ -59,20 +73,19 @@ def main(plt=False):
         assert ierr == 0
         listMDA[i] = -fval
         listSWAmax[i] = xopt
-
         x0, r = bisect(deflectionAngleFromShock, 0, xopt, args=M,
                        full_output=True)
         assert r.converged
         listSWAmin[i] = x0
-
+        listMu[i],listNu[i] = prandtlMeyerNuMuFromMach(M)
+        
     writeTable("DSMdata.csv", (listM, listMDA, listSWAmin, listSWAmax))
     table["MDA"] = interp1d(listM, listMDA, kind='cubic')
     table["SWAmin"] = interp1d(listM, listSWAmin, kind='cubic')
     table["SWAmax"] = interp1d(listM, listSWAmax, kind='cubic')
-
-    # Tables Prandtl-Meyer
-
-
+    writeTable("MNuMUdata.csv",(listM, listMu, listNu))
+    
+    
     if plt:
         from matplotlib.ticker import ScalarFormatter
 
@@ -109,6 +122,7 @@ else:
         table["MDA"] = interp1d(listM, listMDA, kind='cubic')
         table["SWAmin"] = interp1d(listM, listSWAmax, kind='cubic')
         table["SWAmax"] = interp1d(listM, listSWAmin, kind='cubic')
+        writeTable("MNuMUdata.csv",(listM, listMu, listNu))
     except OSError as e:
         print(e)
         main()
