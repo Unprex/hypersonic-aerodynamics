@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+
 from scipy.interpolate import interp1d
 from scipy.optimize import fminbound, bisect
 import numpy as np
@@ -36,7 +36,23 @@ def maximumDeflectionAngle(M):
 
 def shockWaveRange(M):
     return table["SWAmin"](M), table["SWAmax"](M)
+    
+def mach2frommach1(M):      #calcul of mach2 from mach1 
+    return (np.sqrt(((M)**2*(gamma-1)+2)/(M**2*2*gamma-(gamma-1)))) 
+     
+def p2surp1frommach1(M):    #calcul of p2 with p1 and mach1
+    return ((2*gamma*M**2)/(gamma+1))-((gamma-1)/(gamma+1))
+    
+def t2surt1frommach1(M):   #Calcul of t2/t1
+    return ((1+(gamma-1)/2*M**2)*(2*gamma*M**2/(gamma-1)-1))/(M**2*((2*gamma)/(gamma-1)+(gamma-1)/2))    
+    
+def rho2surrho1frommach1(M):    #Calcul de rho2/rho1
+    return ((gamma+1)*M**2)/((gamma-1)*M**2+2)
 
+def po2surpo1frommach1(M): 
+    return (((gamma+1)*M**2/2)/(1+(gamma-1)/2*M**2))**(gamma/(gamma-1))*(1/((2*gamma)*M**2/(gamma+1)-(gamma-1)/(gamma+1)))**(1/(gamma-1))
+    
+    
 
 def main(plt=False):
     """ Generate tables """
@@ -46,12 +62,22 @@ def main(plt=False):
     listMDA = np.empty(n)  # Maximum Deflection Angle
     listSWAmin = np.empty(n)  # Shock Wave Angle at minimum
     listSWAmax = np.empty(n)  # Shock Wave Angle at maximum
-
+    listP2= p2surp1frommach1(listM)    # Shock Droit Pression
+    listT2= t2surt1frommach1(listM)    # Shock Droit Température
+    listM2= mach2frommach1(listM)    # Shock Droit Mach2
+    listpo2= po2surpo1frommach1(listM)    # Shock Droit Pression02
+    listrho2= rho2surrho1frommach1(listM)    # Shock Droit rho2
+    
     iterM = enumerate(listM)
     next(iterM)  # Skip first iteration
     listMDA[0] = 0
     listSWAmin[0] = np.pi / 2
     listSWAmax[0] = np.pi / 2
+    listP2[0] = 1
+    listM2[0] = 1
+    listT2[0] = 1
+    listpo2[0] = 1
+    listrho2[0] = 1
     for i, M in iterM:
         xopt, fval, ierr, numfunc = fminbound(
             lambda t: -deflectionAngleFromShock(t, M), 0, np.pi / 2,
@@ -69,10 +95,8 @@ def main(plt=False):
     table["MDA"] = interp1d(listM, listMDA, kind='cubic')
     table["SWAmin"] = interp1d(listM, listSWAmin, kind='cubic')
     table["SWAmax"] = interp1d(listM, listSWAmax, kind='cubic')
-
-    # Tables Prandtl-Meyer
-
-
+    writeTable("Shockdroitdata.csv", (listP2,listM2,listT2,listrho2,listpo2))
+    
     if plt:
         from matplotlib.ticker import ScalarFormatter
 
@@ -96,8 +120,28 @@ def main(plt=False):
         yticks.append(round(listMDA[-1] * 180 / np.pi))
         ax1.set_yticks(yticks)
         ax1.xaxis.set_major_formatter(ScalarFormatter())
-
+        
+        fig2, ax2 = plt.subplots()
+        ax2.plot(listM, listP2,
+                 label="P2")
+        ax2.plot(listM, listT2,
+                 label="T2")
+        ax2.plot(listM, listpo2,
+                 label="po2")
+        ax2.plot(listM, listrho2,
+                 label="rho2")         
+        ax2.legend()
+        ax2.set_title("Normal Shock Properties"
+                      " (γ = " + str(gamma) + ")")
+        ax2.set_xlabel("Mach")
+        ax2.set_ylabel("Angle (°)")
+        ax2.set_xscale("log")
+        ax2.grid(True, which="both")
+        ax2.set_xticks([1, 2, 3, 5, 10, 20, 30, 50, 100])
+        ax2.xaxis.set_major_formatter(ScalarFormatter())
+        
         plt.show()
+        
 
 
 if __name__ == "__main__":
