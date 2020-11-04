@@ -25,14 +25,89 @@ class Zone:
         self.angle = angle
         self.parent = parent
 
+        self.lines = []
+
+    def addIncidentAngle(self, x, y, angle, color):
+        self.lines.append((x, y, angle, color))
+
+
+class Camera:
+    """ Handles coordinate transform between workspace and screen """
+
+    def __init__(self, screen, x=0, y=0, z=1):
+        self.screen = screen
+        self.x, self.y, self.z = x, y, z
+
+    def createLine(self, x, y, a, c):
+        x1, y1 = self.spaceToScreen(x, y)
+        x2, y2 = pointToBorder(x1, y1, self.angleToScreen(a),
+                               self.screen.winfo_width(),
+                               self.screen.winfo_height())
+        return self.screen.create_line(x1, y1, x2, y2, fill=c)
+
+    def screenToSpace(self, x, y):
+        return x, -y
+
+    def spaceToScreen(self, x, y):
+        return x, -y
+
+    def angleToScreen(self, a):
+        return -a
+
 
 def calculateZones(front, x1, y1, x2, y2):
-    theta = np.arctan2(y1 - y2, x1 - x2)  # rad
+    theta = np.arctan2(y2 - y1, x2 - x1)  # rad
 
+    # Get maximum attached angle
     maxAngle = maximumDeflectionAngle(front.mach)
 
-    if theta > front.angle:
-        print("Ok", theta)
+    # def getZoneCompression(theta):
+    #     sAngle = shockAngleFromDeflection(theta, M)
+
+    # def getZoneExpansion():
+    #     pass
+
+    if theta > front.angle and theta < front.angle + maxAngle:
+        # If the deflection is "up" regarding the stream with attached shock
+
+        # Compression
+        sAngle = shockAngleFromDeflection(theta - front.angle, front.mach)
+        MachC = front.mach * np.cos(sAngle) \
+            / np.cos(front.angle + sAngle - theta)
+        zCompr = Zone(MachC, theta, front)
+        zCompr.addIncidentAngle(x1, y1, -sAngle - front.angle, "red")
+
+        # Expansion
+        MachLine1 = np.arcsin(1 / front.mach)
+        MachE = front.mach  # TODO : Prandlt-Meyer
+        MachLine2 = np.arcsin(1 / MachE)
+        zExp = Zone(MachE, theta, front)
+        zExp.addIncidentAngle(x1, y1, MachLine1 - front.angle, "green")
+        zExp.addIncidentAngle(x1, y1, MachLine2 - theta, "lime")
+
+        return [zCompr, zExp]
+
+    elif theta < front.angle and theta > front.angle - maxAngle:
+        # If the deflection is "down" regarding the stream with attached shock
+        # print("OkD", -theta)
+        # Compression
+        sAngle = shockAngleFromDeflection(-theta + front.angle, front.mach)
+        MachC = front.mach * np.cos(sAngle) \
+            / np.cos(front.angle + sAngle + theta)
+        zCompr = Zone(MachC, -theta, front)
+        zCompr.addIncidentAngle(x1, y1, sAngle - front.angle, "red")
+
+        # Expansion
+        MachLine1 = np.arcsin(1 / front.mach)
+        MachE = front.mach  # TODO : Prandlt-Meyer
+        MachLine2 = np.arcsin(1 / MachE)
+        zExp = Zone(MachE, -theta, front)
+        zExp.addIncidentAngle(x1, y1, -MachLine1 - front.angle, "green")
+        zExp.addIncidentAngle(x1, y1, -MachLine2 - theta, "lime")
+
+        return [zCompr, zExp]
+
+    return []
 
 
 class Canvas(tk.Canvas):
@@ -56,54 +131,43 @@ class MainApplication(tk.Frame):
                                 text="M\u2081 = " + str(round(air.mach, 2)),
                                 font="Consolas", anchor=tk.N)
 
+        self.camera = Camera(self.canvas)
+
         self.mouseX, self.mouseY = 0, 0
-        self.shape, self.text = None, None
+        self.shape, self.text = None, []
         self.lines = [None] * 6
+        self.linesDelete = []
         self.canvas.bind("<Button-1>", self.mouseDown)
         self.canvas.bind("<B1-Motion>", self.mouseDrag)
         self.canvas.bind("<ButtonRelease-1>", self.mouseUp)
 
+    def createText(self, x, y, text, anchor=tk.W, color="black"):
+        self.text.append(self.canvas.create_text(x, y, text=text,
+                                                 anchor=anchor, fill=color))
+        return len(self.text) - 1
+
+    def updateText(self, tId, text, color="black"):
+        self.canvas.itemconfig(self.text[tId], text=text, fill=color)
+
     def mouseDown(self, event):
         self.mouseX, self.mouseY = event.x, event.y
 
-        calculateZones(self.air, self.mouseX, self.mouseY, event.x, event.y)
-        M = self.air.mach
+        zones = calculateZones(
+            self.air,
+            *self.camera.screenToSpace(self.mouseX, self.mouseY),
+            *self.camera.screenToSpace(event.x, event.y))
 
-        self.canvas.delete(self.shape, self.text, *self.lines)
+        self.canvas.delete(self.shape, *self.text, *self.lines,
+                           *self.linesDelete)
+        self.text = []
+
+        for z in zones:
+            for x, y, a, c in z.lines:
+                self.linesDelete.append(self.camera.createLine(x, y, a, c))
+
         self.shape = self.canvas.create_line(
             self.mouseX, self.mouseY, event.x, event.y)
-        self.text = self.canvas.create_text(80, 10, text="θ = 0°", anchor=tk.W)
-
-        theta = 0
-        self.lines[0] = self.canvas.create_line(
-            self.mouseX, self.mouseY, pointToBorder(
-                self.mouseX, self.mouseY, np.arcsin(1/M),
-                self.winfo_width(), self.winfo_height()), fill="green")
-
-        self.lines[1] = self.canvas.create_line(
-            self.mouseX, self.mouseY, pointToBorder(
-                self.mouseX, self.mouseY, np.arcsin(1/M) + theta,
-                self.winfo_width(), self.winfo_height()), fill="lime")
-
-        self.lines[2] = self.canvas.create_line(
-            self.mouseX, self.mouseY, pointToBorder(
-                self.mouseX, self.mouseY, -shockAngleFromDeflection(-theta, M),
-                self.winfo_width(), self.winfo_height()), fill="red")
-
-        self.lines[3] = self.canvas.create_line(
-            event.x, event.y, pointToBorder(
-                event.x, event.y, shockAngleFromDeflection(-theta, M) + theta,
-                self.winfo_width(), self.winfo_height()), fill="red")
-
-        self.lines[4] = self.canvas.create_line(
-            event.x, event.y, pointToBorder(
-                event.x, event.y, -np.arcsin(1/M) + theta,
-                self.winfo_width(), self.winfo_height()), fill="green")
-
-        self.lines[5] = self.canvas.create_line(
-            event.x, event.y, pointToBorder(
-                event.x, event.y, -np.arcsin(1/M),
-                self.winfo_width(), self.winfo_height()), fill="lime")
+        self.createText(80, 10, "θ = 0°")
 
         self.canvas.tag_raise(self.shape)
 
@@ -111,54 +175,28 @@ class MainApplication(tk.Frame):
         self.canvas.coords(self.shape,
                            self.mouseX, self.mouseY, event.x, event.y)
 
-        calculateZones(self.air, self.mouseX, self.mouseY, event.x, event.y)
+        zones = calculateZones(
+            self.air,
+            *self.camera.screenToSpace(self.mouseX, self.mouseY),
+            *self.camera.screenToSpace(event.x, event.y))
+
+        self.canvas.delete(*self.linesDelete)
+
+        for z in zones:
+            for x, y, a, c in z.lines:
+                self.linesDelete.append(self.camera.createLine(x, y, a, c))
+
         M = self.air.mach
 
         theta = np.arctan2(self.mouseY - event.y, event.x - self.mouseX)  # rad
         maxAngle = maximumDeflectionAngle(M)
         color = "red"
-        if -theta <= maxAngle and -theta >= 0:
+        if self.air.angle - theta <= maxAngle \
+                and self.air.angle >= theta - maxAngle:
             color = "black"
 
-            self.canvas.coords(self.lines[0], self.mouseX, self.mouseY,
-                               *pointToBorder(
-                                   self.mouseX, self.mouseY,
-                                   np.arcsin(1/M),
-                                   self.winfo_width(), self.winfo_height()))
-
-            self.canvas.coords(self.lines[1], self.mouseX, self.mouseY,
-                               *pointToBorder(
-                                   self.mouseX, self.mouseY,
-                                   np.arcsin(1/M) + theta,
-                                   self.winfo_width(), self.winfo_height()))
-
-            self.canvas.coords(self.lines[2], self.mouseX, self.mouseY,
-                               *pointToBorder(
-                                   self.mouseX, self.mouseY,
-                                   -shockAngleFromDeflection(-theta, M),
-                                   self.winfo_width(), self.winfo_height()))
-
-            self.canvas.coords(self.lines[3], event.x, event.y, *pointToBorder(
-                event.x, event.y, shockAngleFromDeflection(-theta, M) + theta,
-                self.winfo_width(), self.winfo_height()))
-
-            self.canvas.coords(self.lines[4], event.x, event.y, *pointToBorder(
-                event.x, event.y, -np.arcsin(1/M) + theta,
-                self.winfo_width(), self.winfo_height()))
-
-            self.canvas.coords(self.lines[5], event.x, event.y, *pointToBorder(
-                event.x, event.y, -np.arcsin(1/M),
-                self.winfo_width(), self.winfo_height()))
-
-            for line in self.lines:
-                self.canvas.itemconfigure(line, state="normal")
-        else:
-            for line in self.lines:
-                self.canvas.itemconfigure(line, state="hidden")
-
-        self.canvas.itemconfig(
-            self.text, text="θ = " + str(round(theta * 180 / np.pi, 2)) + "°",
-            fill=color)
+        self.updateText(0, "θ = " + str(round(
+            (theta - self.air.angle) * 180 / np.pi, 2)) + "°", color)
 
     def mouseUp(self, event):
         # Create aero surface and start calculations
