@@ -115,6 +115,57 @@ class Canvas(tk.Canvas):
         tk.Canvas.__init__(self, parent, *args, **kwargs,
                            bd=0, highlightthickness=0)
         self.parent = parent
+        self.text = []
+
+    def createText(self, x, y, text, anchor=tk.W, color="black"):
+        self.text.append(self.create_text(x, y, text=text,
+                                          anchor=anchor, fill=color))
+        return len(self.text) - 1
+
+    def updateText(self, tId, text, color="black"):
+        self.itemconfig(self.text[tId], text=text, fill=color)
+
+    def deleteText(self, tId=None):
+        if tId is None:
+            self.delete(*self.text)
+            self.text = []
+        elif tId < len(self.text):
+            self.delete(self.text[tId])
+            self.text.pop(tId)
+
+
+class UserInput(tk.Frame):
+    def __init__(self, parent, label, default,
+                 from_, to, update, *args, **kwargs):
+        tk.Frame.__init__(self, parent, *args, **kwargs)
+        self.parent = parent
+        self.update = update
+
+        self.label = tk.Label(self, text=label)
+
+        self.var = tk.DoubleVar(value=default)
+        self.spinbox = tk.Spinbox(self, from_=from_, to=to, width=8,
+                                  textvariable=self.var, command=lambda:
+                                  self.updateValue(self.var.get()))
+        self.spinbox.bind('<Return>', lambda _:
+                          self.updateValue(self.var.get()))
+
+        self.scale = tk.Scale(self, from_=np.log10(from_), to=np.log10(to),
+                              orient=tk.HORIZONTAL, showvalue=False,
+                              resolution=(np.log10(to) - np.log10(from_))
+                              / 1e6, command=lambda x:
+                              self.updateValue(10**float(x)))
+        self.scale.set(np.log10(default))
+
+        self.label.pack(side=tk.LEFT)
+        self.spinbox.pack(side=tk.RIGHT)
+        self.scale.pack(fill=tk.X, expand=True)
+
+    def updateValue(self, value):
+        value = round(value, 4)
+        self.var.set(value)
+        self.scale.set(np.log10(value))
+        self.update(value)
 
 
 class MainApplication(tk.Frame):
@@ -123,31 +174,57 @@ class MainApplication(tk.Frame):
         self.parent = parent
         self.air = air
         self.canvas = Canvas(self)
+        self.userInputs = UserInput(self, "Mach  ", 2, 1, 100, self.userUpdate)
 
         self.canvas.pack(fill=tk.BOTH, expand=True)
+        self.userInputs.pack(side=tk.BOTTOM, fill=tk.X, expand=True)
 
         self.canvas.create_line(10, 10, 70, 10, arrow=tk.LAST)
-        self.canvas.create_text(40, 15,
-                                text="M\u2081 = " + str(round(air.mach, 2)),
-                                font="Consolas", anchor=tk.N)
+        self.canvas.text.append(self.canvas.create_text(
+            10, 15, text="M\u2081 = " + str(round(air.mach, 4)),
+            font="Consolas", anchor=tk.NW))
 
         self.camera = Camera(self.canvas)
 
         self.mouseX, self.mouseY = 0, 0
-        self.shape, self.text = None, []
-        self.lines = [None] * 6
-        self.linesDelete = []
+        self.mouseUX, self.mouseUY = 0, 0
+        self.shape = None
+        self.lines = []
         self.canvas.bind("<Button-1>", self.mouseDown)
         self.canvas.bind("<B1-Motion>", self.mouseDrag)
         self.canvas.bind("<ButtonRelease-1>", self.mouseUp)
 
-    def createText(self, x, y, text, anchor=tk.W, color="black"):
-        self.text.append(self.canvas.create_text(x, y, text=text,
-                                                 anchor=anchor, fill=color))
-        return len(self.text) - 1
+    def userUpdate(self, mach):
+        self.air.mach = mach
 
-    def updateText(self, tId, text, color="black"):
-        self.canvas.itemconfig(self.text[tId], text=text, fill=color)
+        self.canvas.updateText(0, "M\u2081 = " + str(round(air.mach, 4)))
+        if self.shape is None:
+            return
+
+        self.canvas.coords(self.shape, self.mouseX, self.mouseY,
+                           self.mouseUX, self.mouseUY)
+
+        zones = calculateZones(
+            self.air,
+            *self.camera.screenToSpace(self.mouseX, self.mouseY),
+            *self.camera.screenToSpace(self.mouseUX, self.mouseUY))
+
+        self.canvas.delete(*self.lines)
+
+        for z in zones:
+            for x, y, a, c in z.lines:
+                self.lines.append(self.camera.createLine(x, y, a, c))
+
+        theta = np.arctan2(self.mouseY - self.mouseUY,
+                           self.mouseUX - self.mouseX)  # rad
+        maxAngle = maximumDeflectionAngle(self.air.mach)
+        color = "red"
+        if self.air.angle - theta <= maxAngle \
+                and self.air.angle >= theta - maxAngle:
+            color = "black"
+
+        self.canvas.updateText(1, "θ = " + str(round(
+            (theta - self.air.angle) * 180 / np.pi, 2)) + "°", color)
 
     def mouseDown(self, event):
         self.mouseX, self.mouseY = event.x, event.y
@@ -157,17 +234,16 @@ class MainApplication(tk.Frame):
             *self.camera.screenToSpace(self.mouseX, self.mouseY),
             *self.camera.screenToSpace(event.x, event.y))
 
-        self.canvas.delete(self.shape, *self.text, *self.lines,
-                           *self.linesDelete)
-        self.text = []
+        self.canvas.delete(self.shape, *self.lines)
+        self.canvas.deleteText(1)
 
         for z in zones:
             for x, y, a, c in z.lines:
-                self.linesDelete.append(self.camera.createLine(x, y, a, c))
+                self.lines.append(self.camera.createLine(x, y, a, c))
 
         self.shape = self.canvas.create_line(
             self.mouseX, self.mouseY, event.x, event.y)
-        self.createText(80, 10, "θ = 0°")
+        self.canvas.createText(80, 10, "θ = 0°")
 
         self.canvas.tag_raise(self.shape)
 
@@ -180,11 +256,11 @@ class MainApplication(tk.Frame):
             *self.camera.screenToSpace(self.mouseX, self.mouseY),
             *self.camera.screenToSpace(event.x, event.y))
 
-        self.canvas.delete(*self.linesDelete)
+        self.canvas.delete(*self.lines)
 
         for z in zones:
             for x, y, a, c in z.lines:
-                self.linesDelete.append(self.camera.createLine(x, y, a, c))
+                self.lines.append(self.camera.createLine(x, y, a, c))
 
         M = self.air.mach
 
@@ -195,12 +271,14 @@ class MainApplication(tk.Frame):
                 and self.air.angle >= theta - maxAngle:
             color = "black"
 
-        self.updateText(0, "θ = " + str(round(
+        self.canvas.updateText(0, "M\u2081 = " + str(round(air.mach, 4)))
+
+        self.canvas.updateText(1, "θ = " + str(round(
             (theta - self.air.angle) * 180 / np.pi, 2)) + "°", color)
 
     def mouseUp(self, event):
-        # Create aero surface and start calculations
-        pass  # TODO: updateCalculations()
+        self.mouseUX, self.mouseUY = event.x, event.y
+        # TODO: updateCalculations()
 
 
 if __name__ == "__main__":
