@@ -9,6 +9,7 @@ table = {}
 fileDSM = "DSMdata.csv"  # Deflection-Shock-Mach (θ-β-M)
 fileIFP = "IFPdata.csv"  # Isentropic Flow Properties
 fileMNuMU = "MNuMUdata.csv"  # Prandtl-Meyer
+fileNSP = "Shockdroitdata.csv"  # Normal Shock Properties
 
 
 def writeTable(file, data):
@@ -69,6 +70,34 @@ def prandtlMeyerNuMuFromMach(M):
 # def prandltMeyerMachFromNu (Nu):
 #    return
 
+# Partie Antoine
+
+
+def mach2frommach1(M):  # calcul of mach2 from mach1
+    return (np.sqrt((M**2 * (gamma - 1) + 2)
+                    / (M**2 * 2 * gamma - (gamma - 1))))
+
+
+def p2surp1frommach1(M):  # calcul of p2 with p1 and mach1
+    return ((2 * gamma * M**2) / (gamma + 1)) - ((gamma - 1) / (gamma + 1))
+
+
+def t2surt1frommach1(M):  # Calcul of t2/t1
+    return (((1 + (gamma - 1) / 2 * M**2)
+             * (2 * gamma * M**2 / (gamma - 1) - 1))
+            / (M**2 * ((2 * gamma) / (gamma - 1) + (gamma - 1) / 2)))
+
+
+def rho2surrho1frommach1(M):  # Calcul de rho2/rho1
+    return ((gamma + 1) * M**2) / ((gamma - 1) * M**2 + 2)
+
+
+def po2surpo1frommach1(M):
+    return ((((gamma + 1) * M**2 / 2)
+             / (1 + (gamma - 1) / 2 * M**2))**(gamma / (gamma - 1))
+            * (1 / ((2 * gamma) * M**2 / (gamma + 1)
+                    - (gamma - 1) / (gamma + 1)))**(1 / (gamma - 1)))
+
 
 def main(plt=False):
     """ Generate tables """
@@ -80,6 +109,11 @@ def main(plt=False):
     listSWAmax = np.empty(n)  # Shock Wave Angle at maximum
     listMu = np.empty(n)  # Mu Prandlt Meyer
     listNu = np.empty(n)  # Nu Prandlt Meyer
+    listP2 = p2surp1frommach1(listM1)  # Shock Droit Pression
+    listT2 = t2surt1frommach1(listM1)  # Shock Droit Température
+    listSM2 = mach2frommach1(listM1)  # Shock Droit Mach2
+    listpo2 = po2surpo1frommach1(listM1)  # Shock Droit Pression02
+    listrho2 = rho2surrho1frommach1(listM1)  # Shock Droit rho2
 
     iterM = enumerate(listM1)
     next(iterM)  # Skip first iteration
@@ -130,6 +164,13 @@ def main(plt=False):
     writeTable(fileMNuMU, (listM1, listMu, listNu))
     table["Mu"] = interp1d(listM1, listMu, kind='cubic')
     table["Nu"] = interp1d(listM1, listNu, kind='cubic')
+
+    writeTable(fileNSP, (listM1, listP2, listSM2, listT2, listrho2, listpo2))
+    table["P2"] = interp1d(listM1, listP2, kind='cubic')
+    table["SM2"] = interp1d(listM1, listSM2, kind='cubic')
+    table["T2"] = interp1d(listM1, listT2, kind='cubic')
+    table["rho2"] = interp1d(listM1, listrho2, kind='cubic')
+    table["po2"] = interp1d(listM1, listpo2, kind='cubic')
 
     # Tables Prandtl-Meyer
 
@@ -182,6 +223,34 @@ def main(plt=False):
         ax3.set_xticks([1, 2, 3, 5, 10, 20, 30, 50, 100])
         ax3.xaxis.set_major_formatter(ScalarFormatter())
 
+        fig4, ax4 = plt.subplots()
+        ax4.plot(listM1, listP2, label="p\u2082/p\u2081")
+        ax4.plot(listM1, listT2, label="T\u2082/T\u2081")
+        ax4.legend()
+        ax4.set_title("Normal Shock Properties"
+                      " (γ = " + str(gamma) + ")")
+        ax4.set_xlabel("Mach")
+        ax4.set_ylabel("Ratio")
+        ax4.set_xscale("log")
+        ax4.set_yscale("log")
+        ax4.grid(True, which="both")
+        ax4.set_xticks([1, 2, 3, 5, 10, 20, 30, 50, 100])
+        ax4.xaxis.set_major_formatter(ScalarFormatter())
+
+        fig5, ax5 = plt.subplots()
+        ax5.plot(listM1, listSM2, label="M\u2082")
+        ax5.plot(listM1, listpo2, label="po\u2082/po\u2081")
+        ax5.plot(listM1, listrho2, label="rho\u2082/rho\u2081")
+        ax5.legend()
+        ax5.set_title("Normal Shock Properties"
+                      " (γ = " + str(gamma) + ")")
+        ax5.set_xlabel("Mach")
+        ax5.set_ylabel("Mach")
+        ax5.set_xscale("log")
+        ax5.grid(True, which="both")
+        ax5.set_xticks([1, 2, 3, 5, 10, 20, 30, 50, 100])
+        ax5.xaxis.set_major_formatter(ScalarFormatter())
+
         plt.show()
 
 
@@ -205,6 +274,14 @@ else:
         listM1, listMu, listNu = readTable(fileMNuMU)
         table["Mu"] = interp1d(listM1, listMu, kind='cubic')
         table["Nu"] = interp1d(listM1, listNu, kind='cubic')
+
+        listM1, listP2, listSM2, listT2, listrho2, listpo2 = \
+            readTable(fileNSP)
+        table["P2"] = interp1d(listM1, listP2, kind='cubic')
+        table["SM2"] = interp1d(listM1, listSM2, kind='cubic')
+        table["T2"] = interp1d(listM1, listT2, kind='cubic')
+        table["rho2"] = interp1d(listM1, listrho2, kind='cubic')
+        table["po2"] = interp1d(listM1, listpo2, kind='cubic')
     except OSError as e:
         print(e)
         main()
