@@ -4,11 +4,12 @@ from scipy.optimize import fminbound, bisect
 import numpy as np
 
 gamma = 1.4
+minM, maxM = 1, 100
 table = {}
 
 fileDSM = "DSMdata.csv"  # Deflection-Shock-Mach (θ-β-M)
 fileIFP = "IFPdata.csv"  # Isentropic Flow Properties
-fileMNuMU = "MNuMUdata.csv"  # Prandtl-Meyer
+fileMNuMu = "MNuMudata.csv"  # Prandtl-Meyer
 fileNSP = "Shockdroitdata.csv"  # Normal Shock Properties
 
 
@@ -64,11 +65,22 @@ def prandtlMeyerNuMuFromMach(M):
             np.sqrt((gamma - 1) / (gamma + 1) * (M**2 - 1))) - np.arctan(
             np.sqrt(M**2 - 1))), np.arcsin(1 / M)
 
-# def prandtlMeyerMachFromMu (Mu):
-#   return 1/np.sin(Mu)
 
-# def prandltMeyerMachFromNu (Nu):
-#    return
+@np.vectorize  # Decorator (machFromNu = np.vectorize(machFromNu))
+def prandtlMeyerMachFromNu(Nu):
+    return bisect(lambda m: (table["Nu"](m) - Nu), minM, maxM)
+
+
+def prandtlMeyerNuFromMach(M):
+    return table["Nu"](M)
+
+
+def prandltMeyerMuFromMach(M):
+    return np.arcsin(1 / M)  # table["Mu"](M)
+
+
+def maximumNu():
+    return table["maxNu"]
 
 # Partie Antoine
 
@@ -103,7 +115,10 @@ def main(plt=False):
     """ Generate tables """
 
     n = 200
-    listM1 = np.logspace(0, 2, n)
+    minMlog = np.log10(minM)
+    maxMlog = np.log10(maxM)
+    moyMlog = (minMlog + maxMlog) / 2
+    listM1 = np.logspace(minMlog, maxMlog, n)
     listMDA = np.empty(n)  # Maximum Deflection Angle
     listSWAmin = np.empty(n)  # Shock Wave Angle at minimum
     listSWAmax = np.empty(n)  # Shock Wave Angle at maximum
@@ -120,8 +135,8 @@ def main(plt=False):
     listMDA[0] = 0
     listSWAmin[0] = np.pi / 2
     listSWAmax[0] = np.pi / 2
-    listMu[0] = 0
-    listNu[0] = np.pi / 2
+    listNu[0] = 0
+    listMu[0] = np.pi / 2
     for i, M in iterM:
         xopt, fval, ierr, numfunc = fminbound(
             lambda t: -deflectionAngleFromShock(t, M), 0, np.pi / 2,
@@ -134,13 +149,13 @@ def main(plt=False):
                        full_output=True)
         assert r.converged
         listSWAmin[i] = x0
-        listMu[i], listNu[i] = prandtlMeyerNuMuFromMach(M)
+        listNu[i], listMu[i] = prandtlMeyerNuMuFromMach(M)
 
     # Partie Olivier
     n1 = 200
     n2 = 100
-    listM21 = np.logspace(0, 1, n1, endpoint=False)  # Mach
-    listM22 = np.logspace(1, 2, n2)
+    listM21 = np.logspace(minMlog, moyMlog, n1, endpoint=False)  # Mach
+    listM22 = np.logspace(moyMlog, maxMlog, n2)
     listM2 = np.concatenate((listM21, listM22))
 
     # pressure/isentropic pressure
@@ -161,9 +176,10 @@ def main(plt=False):
     table["T_sur_Ti"] = interp1d(listM2, listT_sur_Ti, kind='cubic')
     table["rho_sur_rhoi"] = interp1d(listM2, listrho_sur_rhoi, kind='cubic')
 
-    writeTable(fileMNuMU, (listM1, listMu, listNu))
-    table["Mu"] = interp1d(listM1, listMu, kind='cubic')
+    writeTable(fileMNuMu, (listM1, listNu, listMu))
     table["Nu"] = interp1d(listM1, listNu, kind='cubic')
+    table["Mu"] = interp1d(listM1, listMu, kind='cubic')
+    table["maxNu"] = max(listNu)
 
     writeTable(fileNSP, (listM1, listP2, listSM2, listT2, listrho2, listpo2))
     table["P2"] = interp1d(listM1, listP2, kind='cubic')
@@ -259,29 +275,27 @@ if __name__ == "__main__":
     main(plt)
 else:
     try:
-        listM1, listMDA, listSWAmin, listSWAmax = readTable(fileDSM)
-        table["MDA"] = interp1d(listM1, listMDA, kind='cubic')
-        table["SWAmin"] = interp1d(listM1, listSWAmax, kind='cubic')
-        table["SWAmax"] = interp1d(listM1, listSWAmin, kind='cubic')
+        listM, listMDA, listSWAmin, listSWAmax = readTable(fileDSM)
+        table["MDA"] = interp1d(listM, listMDA, kind='cubic')
+        table["SWAmin"] = interp1d(listM, listSWAmax, kind='cubic')
+        table["SWAmax"] = interp1d(listM, listSWAmin, kind='cubic')
 
-        listM2, listp_sur_pi, listT_sur_Ti, listrho_sur_rhoi = readTable(
-            fileIFP)
-        table["p_sur_pi"] = interp1d(listM2, listp_sur_pi, kind='cubic')
-        table["T_sur_Ti"] = interp1d(listM2, listT_sur_Ti, kind='cubic')
-        table["rho_sur_rhoi"] = interp1d(listM2, listrho_sur_rhoi,
-                                         kind='cubic')
+        listM, listPsurPi, listTsurTi, listRhoSurRhoi = readTable(fileIFP)
+        table["p_sur_pi"] = interp1d(listM, listPsurPi, kind='cubic')
+        table["T_sur_Ti"] = interp1d(listM, listTsurTi, kind='cubic')
+        table["rho_sur_rhoi"] = interp1d(listM, listRhoSurRhoi, kind='cubic')
 
-        listM1, listMu, listNu = readTable(fileMNuMU)
-        table["Mu"] = interp1d(listM1, listMu, kind='cubic')
-        table["Nu"] = interp1d(listM1, listNu, kind='cubic')
+        listM, listNu, listMu = readTable(fileMNuMu)
+        table["Nu"] = interp1d(listM, listNu, kind='cubic')
+        table["Mu"] = interp1d(listM, listMu, kind='cubic')
+        table["maxNu"] = max(listNu)
 
-        listM1, listP2, listSM2, listT2, listrho2, listpo2 = \
-            readTable(fileNSP)
-        table["P2"] = interp1d(listM1, listP2, kind='cubic')
-        table["SM2"] = interp1d(listM1, listSM2, kind='cubic')
-        table["T2"] = interp1d(listM1, listT2, kind='cubic')
-        table["rho2"] = interp1d(listM1, listrho2, kind='cubic')
-        table["po2"] = interp1d(listM1, listpo2, kind='cubic')
+        listM, listP2, listSM2, listT2, listrho2, listpo2 = readTable(fileNSP)
+        table["P2"] = interp1d(listM, listP2, kind='cubic')
+        table["SM2"] = interp1d(listM, listSM2, kind='cubic')
+        table["T2"] = interp1d(listM, listT2, kind='cubic')
+        table["rho2"] = interp1d(listM, listrho2, kind='cubic')
+        table["po2"] = interp1d(listM, listpo2, kind='cubic')
     except OSError as e:
         print(e)
         main()
