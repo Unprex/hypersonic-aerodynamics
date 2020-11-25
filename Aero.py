@@ -2,7 +2,11 @@
 import tkinter as tk
 import numpy as np
 
-from Tables import maximumDeflectionAngle, shockAngleFromDeflection
+from Tables import (
+    maximumDeflectionAngle, shockAngleFromDeflection, maximumNu,
+    prandtlMeyerMachFromNu, prandtlMeyerNuFromMach, prandltMeyerMuFromMach
+
+)
 
 
 def pointToBorder(x, y, angle, width, height):  # angle in rad
@@ -66,20 +70,25 @@ def calculateZones(front, x1, y1, x2, y2):
 
     # def getZoneExpansion():
     #     pass
+    dAngle = theta - front.angle
 
-    if theta > front.angle and theta < front.angle + maxAngle:
+    if dAngle > 0 and theta < front.angle + maxAngle:
         # If the deflection is "up" regarding the stream with attached shock
 
         # Compression
-        sAngle = shockAngleFromDeflection(theta - front.angle, front.mach)
-        MachC = front.mach * np.cos(sAngle) \
-            / np.cos(front.angle + sAngle - theta)
+        sAngle = shockAngleFromDeflection(dAngle, front.mach)
+        MachC = front.mach * np.cos(sAngle) / np.cos(sAngle - dAngle)
+
         zCompr = Zone(MachC, theta, front)
         zCompr.addIncidentAngle(x1, y1, -sAngle - front.angle, "red")
 
         # Expansion
         MachLine1 = np.arcsin(1 / front.mach)
-        MachE = front.mach  # TODO : Prandlt-Meyer
+
+        newNu = prandtlMeyerNuFromMach(front.mach) + dAngle
+        assert newNu <= maximumNu()
+        MachE = prandtlMeyerMachFromNu(newNu)
+
         MachLine2 = np.arcsin(1 / MachE)
         zExp = Zone(MachE, theta, front)
         zExp.addIncidentAngle(x1, y1, MachLine1 - front.angle, "green")
@@ -87,25 +96,37 @@ def calculateZones(front, x1, y1, x2, y2):
 
         return [zCompr, zExp]
 
-    elif theta < front.angle and theta > front.angle - maxAngle:
+    elif dAngle < 0 and dAngle > -maxAngle:
         # If the deflection is "down" regarding the stream with attached shock
         # print("OkD", -theta)
         # Compression
-        sAngle = shockAngleFromDeflection(-theta + front.angle, front.mach)
-        MachC = front.mach * np.cos(sAngle) \
-            / np.cos(front.angle + sAngle + theta)
+        sAngle = shockAngleFromDeflection(-dAngle, front.mach)
+        MachC = front.mach * np.cos(sAngle) / np.cos(sAngle - dAngle)
         zCompr = Zone(MachC, -theta, front)
         zCompr.addIncidentAngle(x1, y1, sAngle - front.angle, "red")
 
         # Expansion
-        MachLine1 = np.arcsin(1 / front.mach)
-        MachE = front.mach  # TODO : Prandlt-Meyer
-        MachLine2 = np.arcsin(1 / MachE)
+        MachLine1 = prandltMeyerMuFromMach(front.mach)
+
+        newNu = prandtlMeyerNuFromMach(front.mach) - dAngle
+        assert newNu <= maximumNu()
+        MachE = prandtlMeyerMachFromNu(newNu)
+
+        MachLine2 = prandltMeyerMuFromMach(MachE)
         zExp = Zone(MachE, -theta, front)
         zExp.addIncidentAngle(x1, y1, -MachLine1 - front.angle, "green")
         zExp.addIncidentAngle(x1, y1, -MachLine2 - theta, "lime")
 
         return [zCompr, zExp]
+
+    elif dAngle == 0:
+        sAngle = shockAngleFromDeflection(0, front.mach)
+
+        zUp = Zone(front.mach, -theta, front)
+        zUp.addIncidentAngle(x1, y1, -sAngle - front.angle, "red")
+        zDo = Zone(front.mach, -theta, front)
+        zDo.addIncidentAngle(x1, y1, sAngle - front.angle, "red")
+        return [zUp, zDo]
 
     return []
 
@@ -136,10 +157,11 @@ class Canvas(tk.Canvas):
 
 class UserInput(tk.Frame):
     def __init__(self, parent, label, default,
-                 from_, to, update, *args, **kwargs):
+                 from_, to, update, log=False, *args, **kwargs):
         tk.Frame.__init__(self, parent, *args, **kwargs)
         self.parent = parent
         self.update = update
+        self.log = log  # If the scale is logarithmic
 
         self.label = tk.Label(self, text=label)
 
@@ -150,12 +172,14 @@ class UserInput(tk.Frame):
         self.spinbox.bind('<Return>', lambda _:
                           self.updateValue(self.var.get()))
 
-        self.scale = tk.Scale(self, from_=np.log10(from_), to=np.log10(to),
+        self.scale = tk.Scale(self, from_=np.log10(from_) if log else from_,
+                              to=np.log10(to) if log else to,
                               orient=tk.HORIZONTAL, showvalue=False,
-                              resolution=(np.log10(to) - np.log10(from_))
-                              / 1e6, command=lambda x:
-                              self.updateValue(10**float(x)))
-        self.scale.set(np.log10(default))
+                              resolution=(np.log10(to) if log else to
+                                          - np.log10(from_) if log else from_)
+                              / 1e6, command=lambda x: self.updateValue(
+            10**float(x) if log else float(x)))
+        self.scale.set(np.log10(default) if log else default)
 
         self.label.pack(side=tk.LEFT)
         self.spinbox.pack(side=tk.RIGHT)
@@ -164,7 +188,7 @@ class UserInput(tk.Frame):
     def updateValue(self, value):
         value = round(value, 4)
         self.var.set(value)
-        self.scale.set(np.log10(value))
+        self.scale.set(np.log10(value) if self.log else value)
         self.update(value)
 
 
@@ -174,15 +198,22 @@ class MainApplication(tk.Frame):
         self.parent = parent
         self.air = air
         self.canvas = Canvas(self)
-        self.userInputs = UserInput(self, "Mach  ", 2, 1, 100, self.userUpdate)
+        self.userMach = UserInput(
+            self, "Mach  ", 2, 1, 100, self.userUpdateM, True)
+        self.userAngle = UserInput(
+            self, "Angle  ", 0, -90, 90, self.userUpdateA)
 
         self.canvas.pack(fill=tk.BOTH, expand=True)
-        self.userInputs.pack(side=tk.BOTTOM, fill=tk.X, expand=True)
+        self.userAngle.pack(side=tk.BOTTOM, fill=tk.X)
+        self.userMach.pack(side=tk.BOTTOM, fill=tk.X)
 
-        self.canvas.create_line(10, 10, 70, 10, arrow=tk.LAST)
+        self.zoneAngle = self.canvas.create_line(
+            30 - 20 * np.cos(self.air.angle), 40 + 20 * np.sin(self.air.angle),
+            30 + 20 * np.cos(self.air.angle), 40 - 20 * np.sin(self.air.angle),
+            arrow=tk.LAST)
         self.canvas.text.append(self.canvas.create_text(
-            10, 15, text="M\u2081 = " + str(round(air.mach, 4)),
-            font="Consolas", anchor=tk.NW))
+            10, 10, text="M\u2081 = " + str(round(air.mach, 4)),
+            font="Consolas", anchor=tk.W))
 
         self.camera = Camera(self.canvas)
 
@@ -194,26 +225,14 @@ class MainApplication(tk.Frame):
         self.canvas.bind("<B1-Motion>", self.mouseDrag)
         self.canvas.bind("<ButtonRelease-1>", self.mouseUp)
 
-    def userUpdate(self, mach):
+    def userUpdateM(self, mach):
         self.air.mach = mach
 
         self.canvas.updateText(0, "M\u2081 = " + str(round(air.mach, 4)))
         if self.shape is None:
             return
 
-        self.canvas.coords(self.shape, self.mouseX, self.mouseY,
-                           self.mouseUX, self.mouseUY)
-
-        zones = calculateZones(
-            self.air,
-            *self.camera.screenToSpace(self.mouseX, self.mouseY),
-            *self.camera.screenToSpace(self.mouseUX, self.mouseUY))
-
-        self.canvas.delete(*self.lines)
-
-        for z in zones:
-            for x, y, a, c in z.lines:
-                self.lines.append(self.camera.createLine(x, y, a, c))
+        self.updateZones()
 
         theta = np.arctan2(self.mouseY - self.mouseUY,
                            self.mouseUX - self.mouseX)  # rad
@@ -226,41 +245,64 @@ class MainApplication(tk.Frame):
         self.canvas.updateText(1, "θ = " + str(round(
             (theta - self.air.angle) * 180 / np.pi, 2)) + "°", color)
 
-    def mouseDown(self, event):
-        self.mouseX, self.mouseY = event.x, event.y
+    def userUpdateA(self, angle):
+        self.air.angle = np.pi * angle / 180
 
+        self.canvas.updateText(0, "M\u2081 = " + str(round(air.mach, 4)))
+
+        self.canvas.coords(
+            self.zoneAngle,
+            30 - 20 * np.cos(self.air.angle), 40 + 20 * np.sin(self.air.angle),
+            30 + 20 * np.cos(self.air.angle), 40 - 20 * np.sin(self.air.angle))
+        if self.shape is None:
+            return
+
+        self.updateZones()
+
+        theta = np.arctan2(self.mouseY - self.mouseUY,
+                           self.mouseUX - self.mouseX)  # rad
+        maxAngle = maximumDeflectionAngle(self.air.mach)
+        color = "red"
+        if self.air.angle - theta <= maxAngle \
+                and self.air.angle >= theta - maxAngle:
+            color = "black"
+
+        self.canvas.updateText(1, "θ = " + str(round(
+            (theta - self.air.angle) * 180 / np.pi, 2)) + "°", color)
+
+    def updateZones(self):
         zones = calculateZones(
             self.air,
             *self.camera.screenToSpace(self.mouseX, self.mouseY),
-            *self.camera.screenToSpace(event.x, event.y))
-
-        self.canvas.delete(self.shape, *self.lines)
-        self.canvas.deleteText(1)
-
-        for z in zones:
-            for x, y, a, c in z.lines:
-                self.lines.append(self.camera.createLine(x, y, a, c))
-
-        self.shape = self.canvas.create_line(
-            self.mouseX, self.mouseY, event.x, event.y)
-        self.canvas.createText(80, 10, "θ = 0°")
-
-        self.canvas.tag_raise(self.shape)
-
-    def mouseDrag(self, event):
-        self.canvas.coords(self.shape,
-                           self.mouseX, self.mouseY, event.x, event.y)
-
-        zones = calculateZones(
-            self.air,
-            *self.camera.screenToSpace(self.mouseX, self.mouseY),
-            *self.camera.screenToSpace(event.x, event.y))
+            *self.camera.screenToSpace(self.mouseUX, self.mouseUY))
 
         self.canvas.delete(*self.lines)
 
         for z in zones:
             for x, y, a, c in z.lines:
                 self.lines.append(self.camera.createLine(x, y, a, c))
+
+    def mouseDown(self, event):
+        self.mouseX, self.mouseY = event.x, event.y
+
+        self.updateZones()
+
+        self.canvas.delete(self.shape)
+        self.canvas.deleteText(1)
+
+        self.shape = self.canvas.create_line(
+            self.mouseX, self.mouseY, event.x, event.y)
+        self.canvas.createText(self.canvas.winfo_width() / 2, 10, "θ = 0°")
+
+        self.canvas.tag_raise(self.shape)
+
+    def mouseDrag(self, event):
+        self.mouseUX, self.mouseUY = event.x, event.y
+
+        self.canvas.coords(
+            self.shape, self.mouseX, self.mouseY, self.mouseUX, self.mouseUY)
+
+        self.updateZones()
 
         M = self.air.mach
 
