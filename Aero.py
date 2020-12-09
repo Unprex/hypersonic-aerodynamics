@@ -3,7 +3,7 @@ import tkinter as tk
 import numpy as np
 
 from Tables import (
-    maximumDeflectionAngle, shockAngleFromDeflection, maximumNu,
+    maximumDeflectionAngle, shockAngleFromDeflection, machWaveAngle, maximumNu,
     prandtlMeyerMachFromNu, prandtlMeyerNuFromMach, prandltMeyerMuFromMach
 
 )
@@ -34,20 +34,30 @@ class Zone:
     def addIncidentAngle(self, x, y, angle, color):
         self.lines.append((x, y, angle, color))
 
+    def displayData(self, canvas):
+        text = "M = %f" % np.round(self.mach, 4)
+        x = self.lines[0][0]
+        y = self.lines[0][1] - np.sign(self.lines[0][2]) * 25
+        c = self.lines[0][3]
+
+        return [canvas.createTextSpace(x, y + 10, text, fill=c),
+                canvas.createVectorSpace(x, y - 10, 40, self.angle, c)]
+
 
 class Camera:
     """ Handles coordinate transform between workspace and screen """
 
-    def __init__(self, screen, x=0, y=0, z=1):
-        self.screen = screen
+    def __init__(self, x=0, y=0, z=1):
         self.x, self.y, self.z = x, y, z
 
-    def createLine(self, x, y, a, c):
-        x1, y1 = self.spaceToScreen(x, y)
-        x2, y2 = pointToBorder(x1, y1, self.angleToScreen(a),
-                               self.screen.winfo_width(),
-                               self.screen.winfo_height())
-        return self.screen.create_line(x1, y1, x2, y2, fill=c)
+    def move(self, x, y):
+        self.x += x
+        self.y += y
+        print(self.x, self.y)
+
+    def updateZoom(self, z):
+        self.z = z
+        print(z)
 
     def screenToSpace(self, x, y):
         return x, -y
@@ -102,7 +112,7 @@ def calculateZones(front, x1, y1, x2, y2):
         # Compression
         sAngle = shockAngleFromDeflection(-dAngle, front.mach)
         MachC = front.mach * np.cos(sAngle) / np.cos(sAngle - dAngle)
-        zCompr = Zone(MachC, -theta, front)
+        zCompr = Zone(MachC, theta, front)
         zCompr.addIncidentAngle(x1, y1, sAngle - front.angle, "red")
 
         # Expansion
@@ -113,18 +123,18 @@ def calculateZones(front, x1, y1, x2, y2):
         MachE = prandtlMeyerMachFromNu(newNu)
 
         MachLine2 = prandltMeyerMuFromMach(MachE)
-        zExp = Zone(MachE, -theta, front)
+        zExp = Zone(MachE, theta, front)
         zExp.addIncidentAngle(x1, y1, -MachLine1 - front.angle, "green")
         zExp.addIncidentAngle(x1, y1, -MachLine2 - theta, "lime")
 
         return [zCompr, zExp]
 
     elif dAngle == 0:
-        sAngle = shockAngleFromDeflection(0, front.mach)
+        sAngle = machWaveAngle(front.mach)
 
-        zUp = Zone(front.mach, -theta, front)
+        zUp = Zone(front.mach, theta, front)
         zUp.addIncidentAngle(x1, y1, -sAngle - front.angle, "red")
-        zDo = Zone(front.mach, -theta, front)
+        zDo = Zone(front.mach, theta, front)
         zDo.addIncidentAngle(x1, y1, sAngle - front.angle, "red")
         return [zUp, zDo]
 
@@ -132,27 +142,40 @@ def calculateZones(front, x1, y1, x2, y2):
 
 
 class Canvas(tk.Canvas):
-    def __init__(self, parent, *args, **kwargs):
+    def __init__(self, parent, camera, *args, **kwargs):
         tk.Canvas.__init__(self, parent, *args, **kwargs,
                            bd=0, highlightthickness=0)
         self.parent = parent
-        self.text = []
+        self.camera = camera
+        self.text = {}
 
-    def createText(self, x, y, text, anchor=tk.W, color="black"):
-        self.text.append(self.create_text(x, y, text=text,
-                                          anchor=anchor, fill=color))
-        return len(self.text) - 1
+    def createLine(self, x, y, a, c):
+        x1, y1 = self.camera.spaceToScreen(x, y)
+        x2, y2 = pointToBorder(x1, y1, self.camera.angleToScreen(a),
+                               self.winfo_width(), self.winfo_height())
+        return self.create_line(x1, y1, x2, y2, fill=c)
 
-    def updateText(self, tId, text, color="black"):
-        self.itemconfig(self.text[tId], text=text, fill=color)
+    def createTextSpace(self, x, y, text, **kwargs):
+        return self.create_text(*self.camera.spaceToScreen(x, y),
+                                text=text, **kwargs)
 
-    def deleteText(self, tId=None):
-        if tId is None:
-            self.delete(*self.text)
-            self.text = []
-        elif tId < len(self.text):
-            self.delete(self.text[tId])
-            self.text.pop(tId)
+    def createVector(self, x, y, n, a, c=None):
+        a = self.camera.angleToScreen(a)
+        return self.create_line(
+            x - n * np.cos(a) / 2, y - n * np.sin(a) / 2,
+            x + n * np.cos(a) / 2, y + n * np.sin(a) / 2,
+            arrow=tk.LAST, fill=c)
+
+    def createVectorSpace(self, x, y, n, a, c=None):
+        return self.createVector(*self.camera.spaceToScreen(x, y), n, a, c)
+
+    def updateVector(self, vid, x, y, n, a):
+        a = self.camera.angleToScreen(a)
+        self.coords(vid, x - n * np.cos(a) / 2, y - n * np.sin(a) / 2,
+                    x + n * np.cos(a) / 2, y + n * np.sin(a) / 2)
+
+    def updateVectorSpace(self, vid, x, y, n, a):
+        self.updateVector(vid, *self.camera.spaceToScreen(x, y), n, a)
 
 
 class UserInput(tk.Frame):
@@ -186,7 +209,7 @@ class UserInput(tk.Frame):
         self.scale.pack(fill=tk.X, expand=True)
 
     def updateValue(self, value):
-        value = round(value, 4)
+        value = np.round(value, 4)
         self.var.set(value)
         self.scale.set(np.log10(value) if self.log else value)
         self.update(value)
@@ -197,7 +220,10 @@ class MainApplication(tk.Frame):
         tk.Frame.__init__(self, parent, *args, **kwargs)
         self.parent = parent
         self.air = air
-        self.canvas = Canvas(self)
+
+        self.camera = Camera()
+        self.canvas = Canvas(self, self.camera)
+
         self.userMach = UserInput(
             self, "Mach  ", 2, 1, 100, self.userUpdateM, True)
         self.userAngle = UserInput(
@@ -207,28 +233,39 @@ class MainApplication(tk.Frame):
         self.userAngle.pack(side=tk.BOTTOM, fill=tk.X)
         self.userMach.pack(side=tk.BOTTOM, fill=tk.X)
 
-        self.zoneAngle = self.canvas.create_line(
-            30 - 20 * np.cos(self.air.angle), 40 + 20 * np.sin(self.air.angle),
-            30 + 20 * np.cos(self.air.angle), 40 - 20 * np.sin(self.air.angle),
-            arrow=tk.LAST)
-        self.canvas.text.append(self.canvas.create_text(
-            10, 10, text="M\u2081 = " + str(round(air.mach, 4)),
-            font="Consolas", anchor=tk.W))
-
-        self.camera = Camera(self.canvas)
+        self.zoneAngle = self.canvas.createVector(30, 40, 40, self.air.angle)
+        self.userText = [self.canvas.create_text(
+            10, 10, text="M\u2081 = " + str(np.round(air.mach, 4)),
+            font="Consolas", anchor=tk.W)]
 
         self.mouseX, self.mouseY = 0, 0
         self.mouseUX, self.mouseUY = 0, 0
         self.shape = None
+        self.shapeText = None
         self.lines = []
+        self.texts = []
         self.canvas.bind("<Button-1>", self.mouseDown)
         self.canvas.bind("<B1-Motion>", self.mouseDrag)
         self.canvas.bind("<ButtonRelease-1>", self.mouseUp)
 
+        self.canvas.bind("<MouseWheel>", self.mouseWheel)
+        self.mouseW = 0
+        self.canvas.bind("<B2-Motion>", self.mouseDragMiddle)
+        self.mouse2X, self.mouse2Y = 0, 0
+
+    def mouseWheel(self, event):
+        self.mouseW -= event.delta / 120
+        self.camera.updateZoom(np.exp(self.mouseW / 100))
+
+    def mouseDragMiddle(self, event):
+        self.camera.move(event.x - self.mouse2X, event.y - self.mouse2Y)
+        self.mouse2X, self.mouse2Y = event.x, event.y
+
     def userUpdateM(self, mach):
         self.air.mach = mach
 
-        self.canvas.updateText(0, "M\u2081 = " + str(round(air.mach, 4)))
+        self.canvas.itemconfig(self.userText[0],
+                               text="M\u2081 = " + str(np.round(air.mach, 4)))
         if self.shape is None:
             return
 
@@ -242,18 +279,16 @@ class MainApplication(tk.Frame):
                 and self.air.angle >= theta - maxAngle:
             color = "black"
 
-        self.canvas.updateText(1, "θ = " + str(round(
-            (theta - self.air.angle) * 180 / np.pi, 2)) + "°", color)
+        self.canvas.itemconfig(self.shapeText, text="θ = " + str(np.round(
+            (theta - self.air.angle) * 180 / np.pi, 2)) + "°", fill=color)
 
     def userUpdateA(self, angle):
         self.air.angle = np.pi * angle / 180
 
-        self.canvas.updateText(0, "M\u2081 = " + str(round(air.mach, 4)))
+        self.canvas.itemconfig(self.userText[0],
+                               text="M\u2081 = " + str(np.round(air.mach, 4)))
 
-        self.canvas.coords(
-            self.zoneAngle,
-            30 - 20 * np.cos(self.air.angle), 40 + 20 * np.sin(self.air.angle),
-            30 + 20 * np.cos(self.air.angle), 40 - 20 * np.sin(self.air.angle))
+        self.canvas.updateVector(self.zoneAngle, 30, 40, 40, self.air.angle)
         if self.shape is None:
             return
 
@@ -267,8 +302,8 @@ class MainApplication(tk.Frame):
                 and self.air.angle >= theta - maxAngle:
             color = "black"
 
-        self.canvas.updateText(1, "θ = " + str(round(
-            (theta - self.air.angle) * 180 / np.pi, 2)) + "°", color)
+        self.canvas.itemconfig(self.shapeText, text="θ = " + str(np.round(
+            (theta - self.air.angle) * 180 / np.pi, 2)) + "°", fill=color)
 
     def updateZones(self):
         zones = calculateZones(
@@ -276,23 +311,27 @@ class MainApplication(tk.Frame):
             *self.camera.screenToSpace(self.mouseX, self.mouseY),
             *self.camera.screenToSpace(self.mouseUX, self.mouseUY))
 
-        self.canvas.delete(*self.lines)
+        self.canvas.delete(*self.lines, *self.texts)
+        self.lines = []
+        self.texts = []
 
         for z in zones:
+            self.texts += z.displayData(self.canvas)
             for x, y, a, c in z.lines:
-                self.lines.append(self.camera.createLine(x, y, a, c))
+                self.lines.append(self.canvas.createLine(x, y, a, c))
 
     def mouseDown(self, event):
         self.mouseX, self.mouseY = event.x, event.y
 
-        self.updateZones()
+        self.canvas.delete(self.shape, self.shapeText)
+        self.shapeText = None
 
-        self.canvas.delete(self.shape)
-        self.canvas.deleteText(1)
+        self.updateZones()
 
         self.shape = self.canvas.create_line(
             self.mouseX, self.mouseY, event.x, event.y)
-        self.canvas.createText(self.canvas.winfo_width() / 2, 10, "θ = 0°")
+        self.shapeText = self.canvas.create_text(
+            self.canvas.winfo_width() / 2, 10, text="θ = 0°")
 
         self.canvas.tag_raise(self.shape)
 
@@ -313,10 +352,11 @@ class MainApplication(tk.Frame):
                 and self.air.angle >= theta - maxAngle:
             color = "black"
 
-        self.canvas.updateText(0, "M\u2081 = " + str(round(air.mach, 4)))
+        self.canvas.itemconfig(self.userText[0],
+                               text="M\u2081 = " + str(np.round(air.mach, 4)))
 
-        self.canvas.updateText(1, "θ = " + str(round(
-            (theta - self.air.angle) * 180 / np.pi, 2)) + "°", color)
+        self.canvas.itemconfig(self.shapeText, text="θ = " + str(np.round(
+            (theta - self.air.angle) * 180 / np.pi, 2)) + "°", fill=color)
 
     def mouseUp(self, event):
         self.mouseUX, self.mouseUY = event.x, event.y
