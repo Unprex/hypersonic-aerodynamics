@@ -26,6 +26,10 @@ def deflectionAngleFromShock(delta, M):
                       np.sin(delta) * (M**2 * (gamma + np.cos(2 * delta)) + 2))
 
 
+def machWaveAngle(M):
+    return np.arcsin(1 / M)
+
+
 def shockAngleFromDeflection(theta, M):
     # Find angle using bisection
     assert theta >= 0
