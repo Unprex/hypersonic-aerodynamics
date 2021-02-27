@@ -14,7 +14,8 @@ from Tables import (
     p_sur_pisentropique, T_sur_Tisentropique, rho_sur_rhoisentropique,
     p2surp1fromMachSh, rho2surrho1fromMachSh, t2surt1fromMachSh,
     pressureFromAlt, temperatureFromAlt, densityFromAlt, soundSpeedFromAlt,
-    cpFromM0p2surp1, mach2frommach1, soundSpeedFromTemp, readTable
+    cpFromM0p2surp1, mach2frommach1, soundSpeedFromTemp,
+    readTable, plotAtmo, interp
 )
 
 
@@ -51,11 +52,10 @@ class Zone:
 
         self.lines = []
 
-    def moment(self, moment):
-        self.moment = moment
-
-    def force(self, moment):
-        self.moment = moment
+    def getForce(self, area):
+        fx = self.pressure * area * np.cos(self.angle)
+        fy = -self.pressure * area * np.sin(self.angle)
+        return fx, fy
 
     def setCp(self, Cp):
         self.Cp = Cp
@@ -306,13 +306,18 @@ def calculateZones(front, getZone, angleBack, x1, y1, x2, y2):
     # if theta > np.pi / 2 or theta < -np.pi / 2:
     #     x1, x2 = x2, x1
     #     theta = (theta + np.pi / 2) % np.pi - np.pi / 2
+    area = np.sqrt((x2 - x1)**2 + (y2 - y1)**2) * 1  # m^2 (unit depth)
 
     zUp1 = getZone(front, theta, 1, x1, y1)
     zDown1 = getZone(front, theta, -1, x1, y1)
     if zUp1 is not None and zDown1 is not None:
+        fxU, fyU = zUp1.getForce(area)
+        fxD, fyD = zDown1.getForce(area)
         C_N = zDown1.Cp - zUp1.Cp
+        fx = fxD - fxU
+        fy = fyD - fyU
     else:
-        C_N = None
+        C_N = fx = fy = None
 
     newAngle = front.angle + angleBack
 
@@ -331,27 +336,38 @@ def calculateZones(front, getZone, angleBack, x1, y1, x2, y2):
     elif zDown2 is not None:
         zDown2.addIncidentAngle(x2, y2, newAngle, "gray")
 
-    return [zUp1, zDown1, zUp2, zDown2], C_N
+    return ([zUp1, zDown1, zUp2, zDown2], C_N,
+            fx, fy, (x1 + x2) / 2, (y1 + y2) / 2)
 
 
 def calculateGeomZones(front, getZone, angleBack, conv,
-                       points, vertex, geometry):
+                       points, vertex, geometry, depth):
     newAngle = front.angle + angleBack
 
     def sequence(seq, prec):
-        zones, C_N = [], 0
+        zones, C_N, fx, fy, posfx, posfy = [], 0, 0, 0, None, None
 
         for s in seq:
             if type(s) == list:
-                z, c = sequence(s, prec)
+                z, c, x, y, pfx, pfy = sequence(s, prec)
                 zones += z
-                if c is None or C_N is None:
-                    C_N = None
+                if None in [c, C_N, x, y, pfx, pfy]:
+                    C_N, fx, fy, posfx, posfy = None, None, None, None, None
                 else:
                     C_N += c
+                    fx += x
+                    fy += y
+                    posfx = pfx if posfx is None else (posfx + pfx) / 2
+                    posfy = pfy if posfy is None else (posfy + pfy) / 2
             else:
                 p1, p2, up = vertex[s]
                 p1, p2 = points[p1], points[p2]
+
+                d = 1 if depth is None or up == 0 else depth[s]
+                area = np.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2) * d
+                pfx = (p2[0] + p1[0]) / 2
+                pfy = (p2[1] + p1[1]) / 2
+
                 theta = np.arctan2(p2[1] - p1[1], p2[0] - p1[0])  # rad
                 if theta > np.pi / 2 or theta < -np.pi / 2:
                     p1, p2 = p2, p1
@@ -359,10 +375,15 @@ def calculateGeomZones(front, getZone, angleBack, conv,
 
                 zone = getZone(prec, theta, up, *p1)
                 if zone is None:
-                    return zones, None
+                    return zones, None, None, None, None, None
 
                 zones.append(zone)
                 C_N += -up * zone.Cp
+                x, y = zone.getForce(area)
+                fx += -up * x
+                fy += -up * y
+                posfx = pfx if posfx is None else (posfx + pfx) / 2
+                posfy = pfy if posfy is None else (posfy + pfy) / 2
                 prec = zone
 
         if type(s) != list:
@@ -378,7 +399,7 @@ def calculateGeomZones(front, getZone, angleBack, conv,
                 lastZone.addIncidentAngle(*p2, newAngle - up * conv, "gray")
             zones.append(lastZone)
 
-        return zones, C_N
+        return zones, C_N, fx, fy, posfx, posfy
 
     return sequence(geometry, front)
 
@@ -411,15 +432,16 @@ class Canvas(tk.Canvas):
                                            start=180, end=270))
         return draw
 
-    def createVector(self, x, y, n, a, c=None):
+    def createVector(self, x, y, n, a, c=None, h=0.5):
         a = self.camera.angleToScreen(a)
+        n1, n2 = n * h, n * (1 - h)
         return self.create_line(
-            x - n * np.cos(a) / 2, y - n * np.sin(a) / 2,
-            x + n * np.cos(a) / 2, y + n * np.sin(a) / 2,
+            x - n1 * np.cos(a), y - n1 * np.sin(a),
+            x + n2 * np.cos(a), y + n2 * np.sin(a),
             arrow=tk.LAST, fill=c)
 
-    def createVectorSpace(self, x, y, n, a, c=None):
-        return self.createVector(*self.camera.spaceToScreen(x, y), n, a, c)
+    def createVectorSpace(self, x, y, n, a, c=None, h=0.5):
+        return self.createVector(*self.camera.spaceToScreen(x, y), n, a, c, h)
 
     def updateVector(self, vid, x, y, n, a):
         a = self.camera.angleToScreen(a)
@@ -649,14 +671,14 @@ class CGApplication(tk.Frame):
     def __init__(self, parent, mApp, *args, **kwargs):
         tk.Frame.__init__(self, parent, *args, **kwargs)
         parent.title("Plot Center of Gravity")
-        parent.geometry("500x220")
+        parent.geometry("500x200")
         self.parent = parent
         self.mApp = mApp
 
         self.t, self.cgx, self.cgy = [0], [0], [0]
         self.x, self.y = 0, 0
 
-        self.load = tk.Button(self, text="Load CG File", command=self.loadFile)
+        load = tk.Button(self, text="Load CG File", command=self.loadFile)
         # self.scale = tk.Scale(self, from_=0, to=0,
         #                       orient=tk.HORIZONTAL, showvalue=False,
         #                       resolution=1, command=self.updateCG)
@@ -679,9 +701,12 @@ class CGApplication(tk.Frame):
         tk.Label(coords, text="Y : ").grid(row=0, column=2)
         sy.grid(row=0, column=3)
 
-        self.load.pack(pady=10)
+        plot = tk.Button(self, text="Plot CG over time", command=self.plotCG)
+
+        load.pack(pady=10)
         self.scale.pack(fill=tk.X, pady=5)
         coords.pack(pady=5)
+        plot.pack(pady=5)
 
         self.draw = []
         self.parent.protocol("WM_DELETE_WINDOW", self.onClose)
@@ -700,6 +725,19 @@ class CGApplication(tk.Frame):
         [[x, y]] = self.mApp.transformPoints([[self.x, self.y]])
         self.mApp.canvas.delete(*self.draw)
         self.draw = self.mApp.canvas.createTarget(x, y, 10)
+
+    def plotCG(self):
+        fig1, ax1 = plt.subplots(figsize=(10, 7))
+
+        ax1.plot(self.t, self.cgx, label="X")
+        ax1.plot(self.t, self.cgy, label="Y")
+        ax1.legend()
+        ax1.set_title("Position du CG")
+        ax1.set_xlabel("Temps (s)")
+        ax1.set_ylabel("Position (in)")
+        ax1.grid(True, which="both")
+
+        plt.show()
 
     def getTime(self, value, inv=False):
         if inv:
@@ -759,7 +797,7 @@ class Menubar(tk.Menu):
 
         var = tk.IntVar(value=1)
         methodMenu = tk.Menu(self, tearoff=0)
-        methodMenu.add_radiobutton(label="Clasical",
+        methodMenu.add_radiobutton(label="Classical",
                                    variable=var, value=1, command=self.updateM)
         methodMenu.add_radiobutton(label="Small-Disturbance Theory",
                                    variable=var, value=2, command=self.updateM)
@@ -779,9 +817,14 @@ class Menubar(tk.Menu):
         plotMenu = tk.Menu(self, tearoff=0)
         plotMenu.add_command(label="Plot Tables",
                              command=lambda: tablePlot(plt))
+        plotMenu.add_command(label="Plot Atmosphere",
+                             command=lambda: plotAtmo(plt))
         self.CGLabel = "Plot CG"
         plotMenu.add_command(label=self.CGLabel,
                              command=parent.openCG)
+
+        plotMenu.add_command(label="Plot Everything",
+                             command=self.plotAll)
 
         self.method = var
         self.toolsMenu = toolsMenu
@@ -801,6 +844,181 @@ class Menubar(tk.Menu):
     def disableTr(self):
         self.toolsMenu.entryconfig(self.trLabel, state=tk.DISABLED)
         self.plotMenu.entryconfig(self.CGLabel, state=tk.DISABLED)
+
+    def plotAll(self):
+        fileInc = tkfd.askopenfile(mode="r", filetypes=[
+            ("CSV Files", "*.csv"), ("Any File", "*.*")],
+            title="CSV file containing Time (s) and Angle of Attack (°).")
+
+        fileSpeed = tkfd.askopenfile(mode="r", filetypes=[
+            ("CSV Files", "*.csv"), ("Any File", "*.*")],
+            title="CSV file containing Time (s) and Speed (m/s).")
+
+        fileAlt = tkfd.askopenfile(mode="r", filetypes=[
+            ("CSV Files", "*.csv"), ("Any File", "*.*")],
+            title="CSV file containing Time (s) and Altitude (km).")
+
+        if (fileInc is not None and fileSpeed is not None
+                and fileAlt is not None):
+            figsize = (10, 7)
+
+            ti, i = readTable(fileInc)
+            tv, v = readTable(fileSpeed)
+            ta, a = readTable(fileAlt)
+            inc = interp(ti, i)
+            vel = interp(tv, v)
+            alt = interp(ta, a)
+
+            tmini = max(min(ti), min(tv), min(ta))
+            tmaxi = min(max(ti), max(tv), max(ta))
+
+            t = np.linspace(tmini, tmaxi, 500)
+
+            fig1, ax1 = plt.subplots(figsize=figsize)
+
+            ax1.plot(t, inc(t))
+            ax1.set_title("Incidence en fonction du temps")
+            ax1.set_xlabel("Temps (s)")
+            ax1.set_ylabel("Incidence (°)")
+            ax1.grid(True, which="both")
+
+            fig2, ax2 = plt.subplots(figsize=figsize)
+
+            ax2.plot(t, vel(t))
+            ax2.set_title("Vitesse en fonction du temps")
+            ax2.set_xlabel("Temps (s)")
+            ax2.set_ylabel("Vitesse (m/s)")
+            ax2.grid(True, which="both")
+
+            fig3, ax3 = plt.subplots(figsize=figsize)
+
+            ax3.plot(t, alt(t))
+            ax3.set_title("Altitude en fonction du temps")
+            ax3.set_xlabel("Temps (s)")
+            ax3.set_ylabel("Altitude (km)")
+            ax3.grid(True, which="both")
+
+            # Mach
+
+            fig4, ax4 = plt.subplots(figsize=figsize)
+
+            ax4.plot(t, vel(t) / soundSpeedFromAlt(alt(t)))
+            ax4.set_title("Mach en fonction du temps")
+            ax4.set_xlabel("Temps (s)")
+            ax4.set_ylabel("Mach")
+            ax4.grid(True, which="both")
+
+            # Pressure
+
+            fig5, ax5 = plt.subplots(figsize=figsize)
+
+            ax5.plot(t, pressureFromAlt(alt(t)))
+            ax5.set_title("Pression en fonction du temps")
+            ax5.set_xlabel("Temps (s)")
+            ax5.set_ylabel("Pression (Pa)")
+            ax5.grid(True, which="both")
+
+            # Temperature
+
+            fig6, ax6 = plt.subplots(figsize=figsize)
+
+            ax6.plot(t, temperatureFromAlt(alt(t)))
+            ax6.set_title("Température en fonction du temps")
+            ax6.set_xlabel("Temps (s)")
+            ax6.set_ylabel("Température (K)")
+            ax6.grid(True, which="both")
+
+            # Density
+
+            fig7, ax7 = plt.subplots(figsize=figsize)
+
+            ax7.plot(t, densityFromAlt(alt(t)))
+            ax7.set_title("Densité en fonction du temps")
+            ax7.set_xlabel("Temps (s)")
+            ax7.set_ylabel("Densité (kg/m\u00B3)")
+            ax7.grid(True, which="both")
+
+            if self.parent.shape is None and self.parent.shapes != []:
+                C_NList = []
+                tList = []
+                fxList = []
+                fyList = []
+                pfxList = []
+                pfyList = []
+                for h in t:
+                    air = Zone(vel(h) / soundSpeedFromAlt(alt(h)),
+                               inc(h) * np.pi / 180, z=alt(h))
+                    try:
+                        _, C_N, fx, fy, pfx, pfy = calculateGeomZones(
+                            air, self.parent.method, self.parent.angleBack,
+                            self.parent.conv, self.parent.points,
+                            self.parent.vertex, self.parent.geometry,
+                            self.parent.dataD)
+                    except Exception as e:
+                        print(h, "s", e)
+                    else:
+                        if None not in [C_N, fx, fy, pfx, pfy]:
+                            tList.append(h)
+                            C_NList.append(C_N)
+                            fxList.append(fx)
+                            fyList.append(fy)
+                            pfxList.append(pfx)
+                            pfyList.append(pfy)
+                        print(h, "s", C_N)
+
+                fig8, ax8 = plt.subplots(figsize=figsize)
+
+                ax8.plot(tList, C_NList)
+                ax8.set_title(r"$C_N$ en fonction du temps")
+                ax8.set_xlabel("Temps (s)")
+                ax8.set_ylabel(r"$C_N$")
+                ax8.grid(True, which="both")
+
+                tm = self.parent.dataT["tm"]
+                xs = self.parent.dataT["xs"]
+                ys = self.parent.dataT["ys"]
+
+                fxList = np.array(fxList) * tm**2 / xs
+                fyList = np.array(fyList) * tm**2 / ys
+
+                fig9, ax9 = plt.subplots(figsize=figsize)
+
+                ax9.plot(tList, fxList, label="Selon X")
+                ax9.plot(tList, fyList, label="Selon Y")
+                ax9.set_title("Forces appliquées en fonction du temps")
+                ax9.legend()
+                ax9.set_xlabel("Temps (s)")
+                ax9.set_ylabel("Force (N)")
+                ax9.grid(True, which="both")
+
+                fileCG = tkfd.askopenfile(mode="r", filetypes=[
+                    ("CSV Files", "*.csv"), ("Any File", "*.*")],
+                    title="CSV file containing Time (s) and CG position (in).")
+                if fileCG is not None:
+                    t, x, y = readTable(fileCG)
+
+                    fx = interp(tList, fxList)
+                    fy = interp(tList, fyList)
+                    pfx = interp(tList, pfxList)
+                    pfy = interp(tList, pfyList)
+                    cgx = interp(t, x * 0.0254)  # in -> m
+                    cgy = interp(t, y * 0.0254)  # in -> m
+
+                    tmini = max(min(t), min(tList))
+                    tmaxi = min(max(t), max(tList))
+                    t = np.linspace(tmini, tmaxi, 500)
+
+                    m = (pfx(t) - cgx(t)) * fx(t) + (pfy(t) - cgy(t)) * fy(t)
+
+                    fig0, ax0 = plt.subplots(figsize=figsize)
+
+                    ax0.plot(t, m)
+                    ax0.set_title("Moments appliquées en fonction du temps")
+                    ax0.set_xlabel("Temps (s)")
+                    ax0.set_ylabel("Moment (N.m)")
+                    ax0.grid(True, which="both")
+
+            plt.show()
 
     def updateM(self):
         # TODO: Move to MainApplication
@@ -940,16 +1158,20 @@ class MainApplication(tk.Frame):
         self.mouse2X, self.mouse2Y = 0, 0
 
         self.dataT = None
+        self.dataD = None
         if len(sys.argv) == 2 and sys.argv[1] is not None:
             with open(sys.argv[1], "r") as f:
                 data = js.load(f)
                 if "transform" in data:
                     self.dataT = data["transform"]
                 else:
-                    self.dataT = {"rot": 0, "xs": 1, "ys": 1, "x0": 0, "y0": 0}
+                    self.dataT = {"rot": 0, "xs": 1, "ys": 1,
+                                  "x0": 0, "y0": 0, "tm": 1}
                 self.dataP = data["points"]
                 self.dataV = data["vertex"]
                 self.dataG = data["geometry"]
+                if "depth" in data:
+                    self.dataD = data["depth"]
                 self.loadGeom()
 
     def mouseWheel(self, event):
@@ -1040,19 +1262,16 @@ class MainApplication(tk.Frame):
             return False
 
         if self.shape is None and self.shapes != []:
-            zones, C_N = calculateGeomZones(
+            zones, C_N, fx, fy, pfx, pfy = calculateGeomZones(
                 self.air, self.method, self.angleBack, self.conv,
-                self.points, self.vertex, self.geometry)
+                self.points, self.vertex, self.geometry, self.dataD)
         elif self.shape is not None and self.shapes == []:
-            zones, C_N = calculateZones(
+            zones, C_N, fx, fy, pfx, pfy = calculateZones(
                 self.air, self.method, self.angleBack,
                 *self.camera.screenToSpace(self.mouseX, self.mouseY),
                 *self.camera.screenToSpace(self.mouseUX, self.mouseUY))
         else:
             return False
-
-        if C_N is not None and C_N < 1e6:
-            print("C_N =", round_sig(C_N, self.text_sig))
 
         # TODO: Temp fix (Remove None):
         zones = [z for z in zones if z is not None]
@@ -1060,6 +1279,26 @@ class MainApplication(tk.Frame):
         self.canvas.delete(*self.lines, *self.texts)
         self.lines = []
         self.texts = []
+
+        if C_N is not None and C_N < 1e6:
+            tm = 0.01 if self.dataT is None else self.dataT["tm"]
+            xs = 1 if self.dataT is None else self.dataT["xs"]
+            ys = 1 if self.dataT is None else self.dataT["ys"]
+
+            # px*u*Pa ----> * (m/u)**2 / (px/u) ----> m*m*Pa = N
+            fx *= tm**2 / xs  # TODO: Not correct when xs != yx
+            fy *= tm**2 / ys
+
+            print("C_N =", round_sig(C_N, self.text_sig), "fx =",
+                  round(fx, self.text_sig), "N fy =",
+                  round(fy, self.text_sig), "N")
+
+            if self.dataT is not None:
+                m = np.arctan(np.sqrt(fx**2 + fy**2) / 30) * 30
+                a = np.arctan2(fx, fy)
+
+                self.texts.append(self.canvas.createVectorSpace(
+                    pfx, pfy, m, a, c="#57E", h=0))
 
         for z in zones:
             self.texts += z.displayData(self.canvas, self.text_sig)
@@ -1082,7 +1321,7 @@ class MainApplication(tk.Frame):
         self.geometry = []
 
     def newGeom(self):
-        self.dataT = self.dataP = self.dataV = self.dataG = None
+        self.dataT = self.dataP = self.dataV = self.dataG = self.dataD = None
         self.resetCanvas()
         self.menubar.disableTr()
 
@@ -1092,8 +1331,8 @@ class MainApplication(tk.Frame):
         ys = self.dataT["ys"]
         x0 = self.dataT["x0"]
         y0 = self.dataT["y0"]
-        R = np.array([[np.cos(a) * xs, -np.sin(a) * ys],
-                      [np.sin(a) * xs, np.cos(a) * ys]])
+        R = np.array([[np.cos(a) * xs, -np.sin(a) * xs],
+                      [np.sin(a) * ys, np.cos(a) * ys]])
 
         return np.round(np.dot(points, R)
                         + [[x0, y0]] * len(points), 9).tolist()
@@ -1122,10 +1361,13 @@ class MainApplication(tk.Frame):
             if "transform" in data:
                 self.dataT = data["transform"]
             else:
-                self.dataT = {"rot": 0, "xs": 1, "ys": 1, "x0": 0, "y0": 0}
+                self.dataT = {"rot": 0, "xs": 1, "ys": 1,
+                              "x0": 0, "y0": 0, "tm": 1}
             self.dataP = data["points"]
             self.dataV = data["vertex"]
             self.dataG = data["geometry"]
+            if "depth" in data:
+                self.dataD = data["depth"]
             self.loadGeom()
 
     def saveGeom(self):
@@ -1133,13 +1375,17 @@ class MainApplication(tk.Frame):
             ("JSON Files", "*.json"), ("Any File", "*.*")],
             defaultextension=".json")
         if file is not None:
-            if self.points != [] and self.vertex != [] and self.geometry != []:
-                js.dump({
-                    "points": self.points,
-                    "vertex": self.vertex,
-                    "geometry": self.geometry,
-                }, file)
-            elif self.shape is not None:
+            if self.shape is None and self.shapes != []:
+                data = {
+                    "transform": self.dataT,
+                    "points": self.dataP,
+                    "vertex": self.dataV,
+                    "geometry": self.dataG,
+                }
+                if self.dataD is not None:
+                    data["depth"] = self.dataD
+                js.dump(data, file)
+            elif self.shape is not None and self.shapes == []:
                 x1, y1, x2, y2 = self.canvas.coords(self.shape)
                 js.dump({
                     "points": [self.camera.screenToSpace(x1, y1),
@@ -1147,19 +1393,25 @@ class MainApplication(tk.Frame):
                     "vertex": [(0, 1, 1), (0, 1, -1)],
                     "geometry": [[0], [1]],
                 }, file)
+            else:
+                raise "Could not save data, invalid internal format."
             file.close()
 
     def exampleGeom(self, k):
         if k == 1:
-            self.dataT = {"rot": 0, "xs": 1, "ys": 1, "x0": 400, "y0": -250}
+            self.dataT = {"rot": 0, "xs": 1, "ys": 1,
+                          "x0": 400, "y0": -250, "tm": 0.01}
             self.dataP = [(-200, 0), (0, -10), (0, 10), (200, 0)]
             self.dataV = [(0, 1, -1), (1, 3, -1), (0, 2, 1), (2, 3, 1)]
             self.dataG = [[0, 1], [2, 3]]
+            self.dataD = None
         elif k == 2:
-            self.dataT = {"rot": 0, "xs": 1, "ys": 1, "x0": 200, "y0": -260}
+            self.dataT = {"rot": 0, "xs": 1, "ys": 1,
+                          "x0": 200, "y0": -260, "tm": 0.01}
             self.dataP = [[0, 0], [300, -40], [150, 10], [450, -30]]
             self.dataV = [[0, 1, 1], [0, 1, -1], [2, 3, 1], [2, 3, -1]]
             self.dataG = [[0, [[2], [3]]], [1]]
+            self.dataD = None
         else:
             print(k)
             return
@@ -1219,10 +1471,12 @@ class MainApplication(tk.Frame):
             dx, dy = self.camera.screenToSpace(self.mouseUX, self.mouseUY)
             dx -= x
             dy -= y
-            self.dataT = {"rot": 0, "xs": 1, "ys": 1, "x0": x, "y0": y}
+            self.dataT = {"rot": 0, "xs": 1, "ys": 1,
+                          "x0": x, "y0": y, "tm": 0.01}
             self.dataP = [[0, 0], [dx, dy]]
             self.dataV = [[0, 1, 1], [0, 1, -1]]
             self.dataG = [[0], [1]]
+            self.dataD = None
             self.loadGeom()
 
     def onExit(self):
