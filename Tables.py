@@ -109,7 +109,6 @@ fileNSP = "Shockdroitdata.csv"  # Normal Shock Properties
 
 
 def writeTable(file, data):
-    print("Creating file:", file)
     np.savetxt(file, data, delimiter=",")
 
 
@@ -239,6 +238,10 @@ def cpFromM0p2surp1(M0, p2surp1):
     return 2 * (p2surp1 - 1) / (gamma * M0**2)
 
 
+def interp(x, y, kind='cubic'):
+    return interp1d(x, y, kind)
+
+
 def main(plt=False):
     """ Generate tables """
 
@@ -294,27 +297,27 @@ def main(plt=False):
     listrho_sur_rhoi = rho_sur_rhoisentropique(listM2)
 
     writeTable(fileDSM, (listM1, listMDA, listSWAmin, listSWAmax))
-    table["MDA"] = interp1d(listM1, listMDA, kind='cubic')
-    table["SWAmin"] = interp1d(listM1, listSWAmin, kind='cubic')
-    table["SWAmax"] = interp1d(listM1, listSWAmax, kind='cubic')
+    table["MDA"] = interp(listM1, listMDA)
+    table["SWAmin"] = interp(listM1, listSWAmin)
+    table["SWAmax"] = interp(listM1, listSWAmax)
 
     writeTable(fileIFP, (listM2, listp_sur_pi,
                          listT_sur_Ti, listrho_sur_rhoi))
-    table["p_sur_pi"] = interp1d(listM2, listp_sur_pi, kind='cubic')
-    table["T_sur_Ti"] = interp1d(listM2, listT_sur_Ti, kind='cubic')
-    table["rho_sur_rhoi"] = interp1d(listM2, listrho_sur_rhoi, kind='cubic')
+    table["p_sur_pi"] = interp(listM2, listp_sur_pi)
+    table["T_sur_Ti"] = interp(listM2, listT_sur_Ti)
+    table["rho_sur_rhoi"] = interp(listM2, listrho_sur_rhoi)
 
     writeTable(fileMNuMu, (listM1, listNu, listMu))
-    table["Nu"] = interp1d(listM1, listNu, kind='cubic')
-    table["Mu"] = interp1d(listM1, listMu, kind='cubic')
+    table["Nu"] = interp(listM1, listNu)
+    table["Mu"] = interp(listM1, listMu)
     table["maxNu"] = max(listNu)
 
     writeTable(fileNSP, (listM1, listP2, listSM2, listT2, listrho2, listpo2))
-    table["P2"] = interp1d(listM1, listP2, kind='cubic')
-    table["SM2"] = interp1d(listM1, listSM2, kind='cubic')
-    table["T2"] = interp1d(listM1, listT2, kind='cubic')
-    table["rho2"] = interp1d(listM1, listrho2, kind='cubic')
-    table["po2"] = interp1d(listM1, listpo2, kind='cubic')
+    table["P2"] = interp(listM1, listP2)
+    table["SM2"] = interp(listM1, listSM2)
+    table["T2"] = interp(listM1, listT2)
+    table["rho2"] = interp(listM1, listrho2)
+    table["po2"] = interp(listM1, listpo2)
 
     # Tables Prandtl-Meyer
 
@@ -546,6 +549,55 @@ def soundSpeedFromAlt(z):  # km -> m/s
     return soundSpeedFromTemp(temperatureFromAlt(z))
 
 
+def plotAtmo(plt):
+    # Figure_P
+
+    z = np.linspace(0, 100, 500)
+    fig1, ax1 = plt.subplots()
+
+    ax1.plot(pressureFromAlt(z), z)
+    ax1.set_title("Pression en fonction de l'altitude")
+    ax1.set_xlabel("Pression (Pa)")
+    ax1.set_ylabel("Altitude (km)")
+    ax1.grid(True, which="both")
+
+    # Figure_T
+
+    z = np.linspace(0, 100, 500)
+    fig2, ax2 = plt.subplots()
+
+    ax2.plot(temperatureFromAlt(z), z)
+    ax2.set_title("Température en fonction de l'altitude")
+    ax2.set_xlabel("Température (K)")
+    ax2.set_ylabel("Altitude (km)")
+    ax2.grid(True, which="both")
+
+    # Figure_D
+
+    z = np.linspace(0, 100, 500)
+    fig3, ax3 = plt.subplots()
+
+    ax3.plot(densityFromAlt(z), z)
+    ax3.set_title("Densité en fonction de l'altitude")
+    ax3.set_xlabel("Densité (kg/m\u00B3)")
+    ax3.set_ylabel("Altitude (km)")
+    ax3.set_xscale("log")
+    ax3.grid(True, which="both")
+
+    # Figure_S
+
+    z = np.linspace(0, 100, 500)
+    fig4, ax4 = plt.subplots()
+
+    ax4.plot(soundSpeedFromAlt(z), z)
+    ax4.set_title("Vitesse du son en fonction de l'altitude")
+    ax4.set_xlabel("Vitesse (m/s)")
+    ax4.set_ylabel("Altitude (km)")
+    ax4.grid(True, which="both")
+
+    plt.show()
+
+
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
     main(plt)
@@ -689,28 +741,26 @@ if __name__ == "__main__":
 else:
     try:
         listM, listMDA, listSWAmin, listSWAmax = readTable(fileDSM)
-        table["MDA"] = interp1d(listM, listMDA, kind='cubic')
-        table["SWAmin"] = interp1d(listM, listSWAmax, kind='cubic')
-        table["SWAmax"] = interp1d(listM, listSWAmin, kind='cubic')
+        table["MDA"] = interp(listM, listMDA)
+        table["SWAmin"] = interp(listM, listSWAmax)
+        table["SWAmax"] = interp(listM, listSWAmin)
 
         listM, listPsurPi, listTsurTi, listRhoSurRhoi = readTable(fileIFP)
-        table["p_sur_pi"] = interp1d(listM, listPsurPi, kind='cubic')
-        table["T_sur_Ti"] = interp1d(listM, listTsurTi, kind='cubic')
-        table["rho_sur_rhoi"] = interp1d(listM, listRhoSurRhoi, kind='cubic')
+        table["p_sur_pi"] = interp(listM, listPsurPi)
+        table["T_sur_Ti"] = interp(listM, listTsurTi)
+        table["rho_sur_rhoi"] = interp(listM, listRhoSurRhoi)
 
         listM, listNu, listMu = readTable(fileMNuMu)
-        table["Nu"] = interp1d(listM, listNu, kind='cubic')
-        table["Mu"] = interp1d(listM, listMu, kind='cubic')
+        table["Nu"] = interp(listM, listNu)
+        table["Mu"] = interp(listM, listMu)
         table["maxNu"] = max(listNu)
 
         listM, listP2, listSM2, listT2, listrho2, listpo2 = readTable(fileNSP)
-        table["P2"] = interp1d(listM, listP2, kind='cubic')
-        table["SM2"] = interp1d(listM, listSM2, kind='cubic')
-        table["T2"] = interp1d(listM, listT2, kind='cubic')
-        table["rho2"] = interp1d(listM, listrho2, kind='cubic')
-        table["po2"] = interp1d(listM, listpo2, kind='cubic')
+        table["P2"] = interp(listM, listP2)
+        table["SM2"] = interp(listM, listSM2)
+        table["T2"] = interp(listM, listT2)
+        table["rho2"] = interp(listM, listrho2)
+        table["po2"] = interp(listM, listpo2)
     except OSError as e:
         print(e)
-        print("Generating new data tables")
-        import matplotlib.pyplot as plt
-        main(plt)
+        main()
