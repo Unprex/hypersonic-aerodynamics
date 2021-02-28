@@ -50,6 +50,12 @@ class Zone:
             self.updateAlt(z)
         self.parent = parent
 
+        if parent is None:
+            self.i = 0
+        else:
+            self.i = parent.i + 1
+        self.up = None
+
         self.lines = []
 
     def getForce(self, area):
@@ -377,6 +383,7 @@ def calculateGeomZones(front, getZone, angleBack, conv,
                 if zone is None:
                     return zones, None, None, None, None, None
 
+                zone.up = up
                 zones.append(zone)
                 C_N += -up * zone.Cp
                 x, y = zone.getForce(area)
@@ -675,14 +682,21 @@ class CGApplication(tk.Frame):
         self.parent = parent
         self.mApp = mApp
 
-        self.t, self.cgx, self.cgy = [0], [0], [0]
-        self.x, self.y = 0, 0
+        self.defaultI = mApp.air.angle * 180 / np.pi
+        self.defaultM = mApp.air.mach
+        self.defaultA = mApp.air.altitude
+        if self.defaultA is None:
+            self.defaultPTD = (mApp.air.pressure,
+                               mApp.air.temperature,
+                               mApp.air.density)
 
-        load = tk.Button(self, text="Load CG File", command=self.loadFile)
-        # self.scale = tk.Scale(self, from_=0, to=0,
-        #                       orient=tk.HORIZONTAL, showvalue=False,
-        #                       resolution=1, command=self.updateCG)
-        self.scale = UserInput(self, "Time ", "s", 0,
+        self.t, self.cgx, self.cgy = [0], [0], [0]
+        self.currentT, self.x, self.y = 0, 0, 0
+        self.resetIMA()
+
+        load = tk.Button(self, text="Load CG File", command=self.loadCGFile)
+
+        self.scale = UserInput(self, "Time ", "s", self.currentT,
                                0, 0, self.updateCG, fun=self.getTime)
 
         coords = tk.Frame(self)
@@ -703,10 +717,22 @@ class CGApplication(tk.Frame):
 
         plot = tk.Button(self, text="Plot CG over time", command=self.plotCG)
 
+        files = tk.Frame(self)
+
+        tk.Button(files, text="Load Angle of Attack File",
+                  command=self.loadIncFile).grid(row=0, column=0, padx=5)
+        tk.Button(files, text="Load Mach File",
+                  command=self.loadMachFile).grid(row=0, column=1, padx=5)
+        tk.Button(files, text="Load Altitude File",
+                  command=self.loadAltFile).grid(row=0, column=2, padx=5)
+        tk.Button(files, text="Reset Files",
+                  command=self.resetIMA).grid(row=0, column=3, padx=5)
+
         load.pack(pady=10)
         self.scale.pack(fill=tk.X, pady=5)
         coords.pack(pady=5)
         plot.pack(pady=5)
+        files.pack(pady=10)
 
         self.draw = []
         self.parent.protocol("WM_DELETE_WINDOW", self.onClose)
@@ -734,7 +760,7 @@ class CGApplication(tk.Frame):
         ax1.legend()
         ax1.set_title("Position du CG")
         ax1.set_xlabel("Temps (s)")
-        ax1.set_ylabel("Position (in)")
+        ax1.set_ylabel("Position (same units as json)")
         ax1.grid(True, which="both")
 
         plt.show()
@@ -747,7 +773,15 @@ class CGApplication(tk.Frame):
         return self.t[int(value)]
 
     def updateCG(self, value):
+        self.currentT = value
         t = self.getTime(value, inv=True)
+
+        if self.inc is not None:
+            self.mApp.userUpdateA(self.inc(value))
+        if self.mach is not None:
+            self.mApp.userUpdateM(self.mach(value))
+        if self.alt is not None:
+            self.mApp.userUpdateZ(self.alt(value))
 
         self.x, self.y = self.cgx[t], self.cgy[t]
         self.varX.set(self.x)
@@ -756,17 +790,73 @@ class CGApplication(tk.Frame):
 
     def onClose(self):
         self.mApp.canvas.delete(*self.draw)
+        self.resetIMA()
         self.parent.destroy()
 
-    def loadFile(self):
+    def loadCGFile(self):
         fileName = tkfd.askopenfile(mode="r", filetypes=[
-            ("CSV Files", "*.csv"), ("Any File", "*.*")])
+            ("CSV Files", "*.csv"), ("Any File", "*.*")],
+            title="CSV file containing Time (s) "
+                  "and CG position (same units as json).")
 
         if fileName is not None:
             self.t, self.cgx, self.cgy = readTable(fileName)
 
             self.scale.updateScale(0, len(self.t) - 1)
             self.updateCG(0)
+
+    def interp(self, tlist, xlist):
+        mint = min(tlist)
+        maxt = max(tlist)
+        interpfun = interp(tlist, xlist)
+
+        def interpBorder(t):
+            if t < mint:
+                return xlist[mint]
+            elif t > maxt:
+                return xlist[maxt]
+            return interpfun(t)
+
+        return interpBorder
+
+    def loadIncFile(self):
+        fileName = tkfd.askopenfile(mode="r", filetypes=[
+            ("CSV Files", "*.csv"), ("Any File", "*.*")],
+            title="CSV file containing Time (s) and Angle of Attack (°).")
+
+        if fileName is not None:
+            self.inc = self.interp(*readTable(fileName))
+            self.mApp.userUpdateA(self.inc(self.currentT))
+
+    def loadMachFile(self):
+        fileName = tkfd.askopenfile(mode="r", filetypes=[
+            ("CSV Files", "*.csv"), ("Any File", "*.*")],
+            title="CSV file containing Time (s) and Mach.")
+
+        if fileName is not None:
+            self.mach = self.interp(*readTable(fileName))
+            self.mApp.userUpdateM(self.mach(self.currentT))
+
+    def loadAltFile(self):
+        fileName = tkfd.askopenfile(mode="r", filetypes=[
+            ("CSV Files", "*.csv"), ("Any File", "*.*")],
+            title="CSV file containing Time (s) and Altitude (km).")
+
+        if fileName is not None:
+            self.alt = self.interp(*readTable(fileName))
+            self.mApp.userUpdateZ(self.alt(self.currentT))
+
+    def resetIMA(self):
+        self.inc, self.mach, self.alt = None, None, None
+        self.mApp.userUpdateA(self.defaultI)
+        self.mApp.userUpdateM(self.defaultM)
+        if self.defaultA is None:
+            p, t, d = self.defaultPTD
+            self.mApp.userUpdateP(p)
+            self.mApp.userUpdateT(t)
+            self.mApp.userUpdateD(d)
+        else:
+            self.mApp.userUpdateZ(self.defaultA)
 
 
 class Menubar(tk.Menu):
@@ -945,11 +1035,14 @@ class Menubar(tk.Menu):
                 fyList = []
                 pfxList = []
                 pfyList = []
+
+                # testtimeList = {}
+                # testTList = {}
                 for h in t:
                     air = Zone(vel(h) / soundSpeedFromAlt(alt(h)),
                                inc(h) * np.pi / 180, z=alt(h))
                     try:
-                        _, C_N, fx, fy, pfx, pfy = calculateGeomZones(
+                        z, C_N, fx, fy, pfx, pfy = calculateGeomZones(
                             air, self.parent.method, self.parent.angleBack,
                             self.parent.conv, self.parent.points,
                             self.parent.vertex, self.parent.geometry,
@@ -964,7 +1057,38 @@ class Menubar(tk.Menu):
                             fyList.append(fy)
                             pfxList.append(pfx)
                             pfyList.append(pfy)
+
+                        # for k in z:
+                        #     if k is not None:
+                        #         i = k.i
+                        #         if i in testtimeList:
+                        #             if testtimeList[i][-1] == h:
+                        #                 testTList[i][-1] = max(
+                        #                     testTList[i][-1], k.pressure)
+                        #             else:
+                        #                 testtimeList[i].append(h)
+                        #                 testTList[i].append(k.pressure)
+                        #         else:
+                        #             testtimeList[i] = [h]
+                        #             testTList[i] = [k.pressure]
                         print(h, "s", C_N)
+
+                # figt, axt = plt.subplots(figsize=figsize)
+                # label = ["0", "Pointe", "Tour de sauvetage", "Capsule",
+                #          "Étage 4", "Inter Étage 3-4", "Étage 3",
+                #          "Inter Étage 2-3", "Étage 1 et 2", ""]
+
+                # for k in testtimeList.keys():
+                #     axt.plot(testtimeList[k], testTList[k], label=label[k])
+                # axt.legend()
+                # # axt.set_title("Température maximum sur "
+                # #               "la fusée en fonction du temps")
+                # axt.set_title("Pression maximum sur "
+                #               "la fusée en fonction du temps")
+                # axt.set_xlabel("Temps (s)")
+                # # axt.set_ylabel("Température (K)")
+                # axt.set_ylabel("Pression (Pa)")
+                # axt.grid(True, which="both")
 
                 fig8, ax8 = plt.subplots(figsize=figsize)
 
@@ -1189,7 +1313,7 @@ class MainApplication(tk.Frame):
         self.air.mach = mach
         self.updateMachText()
 
-        if not self.updateZones():
+        if self.updateZones():
             self.updateShapeText()
 
     def userUpdateA(self, angle):
@@ -1259,6 +1383,8 @@ class MainApplication(tk.Frame):
 
     def updateZones(self, forced=False):
         if not self.menubar.autoUpdate.get() and not forced:
+            return False
+        if self.air.mach < 1:
             return False
 
         if self.shape is None and self.shapes != []:
